@@ -1,7 +1,8 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { Action, CatchupInfo, Channel, PlaylistEntry, Programme, VodItem, SeriesItem } from '../types';
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { Focus, type FocusScope } from '../navigation/focus-scope';
-import { html, raw } from '../utils/dom';
+import { html, inShownView, raw } from '../utils/dom';
 import { channelLockBadge, seriesLockBadge, vodLockBadge } from './parental-badge';
 import { morph } from '../utils/morph';
 import { PlaylistService } from '../services/playlist-service';
@@ -241,6 +242,7 @@ export class Search {
   private readonly railWindows = new Map<string, string>();
   private queryFrame: number | null = null;
   private queryGeneration = 0;
+  private programActivationSeq = 0;
   private queryPending = false;
   // Down/Enter handed focus over before the results existed; focus them once a query renders.
   private focusPending = false;
@@ -630,6 +632,7 @@ export class Search {
 
   deactivate(): void {
     this.active = false;
+    this.programActivationSeq++;
     this.abortRecordFallback();
     this.focusPending = false;
     this.programIndexGeneration++;
@@ -1019,7 +1022,7 @@ export class Search {
     this.railWindows.set(key, this.railWindow(items.length, range));
     // Left and Right stop at a section's ends; only Up and Down leave it.
     return html`
-      <div class="catalog-rail" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
+      <div class="catalog-rail" data-key="section:${key}" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
         <h2 class="catalog-rail-title">${title}</h2>
         <div class="catalog-rail-track search-virtual-rail ${
                key === 'channels-rail' ? 'search-channel-rail' : ''
@@ -1056,7 +1059,7 @@ export class Search {
     )?.clientHeight || SEARCH_LIST_VIEWPORT;
     const range = virtualizer.getRange(items.length, viewport);
     return html`
-      <div class="search-virtual-section ${key === 'programmes' ? 'search-programs' : ''}" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
+      <div class="search-virtual-section ${key === 'programmes' ? 'search-programs' : ''}" data-key="section:${key}" data-nav-container data-nav-leave-left="" data-nav-leave-right="">
         <h2 class="catalog-rail-title">${title}</h2>
         <div class="search-virtual-scroll"
              data-search-virtual="${key}" data-search-axis="vertical">
@@ -1873,7 +1876,16 @@ export class Search {
     // A stream id alone, kept for every Xtream channel, is no catch-up.
     if (programme.stop.getTime() <= now && channel.catchupAccountId && channel.catchupStreamId
       && hasCatchup(channel) && (!!programme.catchupId || !catchupNeedsId(channel))) {
+      const seq = ++this.programActivationSeq;
       await XtreamArchiveService.load(channel);
+      if (seq !== this.programActivationSeq
+        || !this.active
+        || !inShownView(this.container)
+        || this.query !== query
+        || this.visiblePrograms[index] !== result
+        || PlaylistService.channels[result.channelIndex] !== channel) {
+        return;
+      }
       if (!XtreamArchiveService.isAvailable(channel, programme.start.getTime(), Date.now(), programme.catchupId)) {
         showToast(t('epg.catchupUnavailable'));
         this.render();

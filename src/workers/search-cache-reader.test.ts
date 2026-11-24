@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { IDBDatabase as FakeIDBDatabase, IDBFactory, IDBObjectStore as FakeIDBObjectStore } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -275,5 +276,36 @@ describe('IdbSearchCacheReader', () => {
   it('fails without IndexedDB', async () => {
     const reader = new IdbSearchCacheReader(undefined);
     expect(await reason(reader.read(REF, TIMEOUT))).toBe('unavailable');
+  });
+
+  it('rejects a non-aborting readonly request failure instead of resolving undefined', async () => {
+    const openReq: Record<string, unknown> = {};
+    const db = {
+      version: DB_VERSION,
+      objectStoreNames: { contains: () => true },
+      close: () => {},
+      transaction: () => {
+        const tx: Record<string, unknown> = {};
+        const req: Record<string, unknown> = {};
+        tx.objectStore = () => ({ get: () => req, getAll: () => ({ result: [] }) });
+        queueMicrotask(() => {
+          (req.onerror as (() => void) | undefined)?.();
+          (tx.oncomplete as (() => void) | undefined)?.();
+        });
+        return tx;
+      },
+    };
+    const factory = {
+      open: () => {
+        queueMicrotask(() => {
+          openReq.result = db;
+          (openReq.onsuccess as (() => void) | undefined)?.();
+        });
+        return openReq;
+      },
+    } as unknown as IDBFactory;
+
+    const reader = new IdbSearchCacheReader(factory);
+    expect(await reason(reader.read(REF, TIMEOUT))).toBe('read_failed');
   });
 });

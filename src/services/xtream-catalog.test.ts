@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PlaylistEntry } from '../types';
 import type { CatalogListState } from './idb-cache';
@@ -355,6 +356,22 @@ describe('xtream-catalog', () => {
     clientMock.getVodInfo.mockResolvedValueOnce(null);
     (setCachedCatalog as unknown as { mockClear: () => void }).mockClear();
     expect(await loadVodInfo(account, '11')).toBeNull();
+    expect(setCachedCatalog).not.toHaveBeenCalled();
+  });
+
+  it('cancels an in-flight loadVodInfo and skips caching after clearCachedCatalog', async () => {
+    let release!: (info: unknown) => void;
+    clientMock.getVodInfo.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+
+    const pending = loadVodInfo(account, '10');
+    await Promise.resolve();
+    cacheState.generation++;
+    cacheStore.clear();
+    release({ plot: 'p', cast: '', director: '', genre: '', releaseDate: '', durationSecs: 0, poster: '', backdrop: '', imdbId: '', tmdbId: '', year: 0 });
+
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
     expect(setCachedCatalog).not.toHaveBeenCalled();
   });
 

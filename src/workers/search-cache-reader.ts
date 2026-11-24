@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { DB_NAME, DB_VERSION, PLAYLIST_STORE } from '../services/idb-schema';
 import {
   joinPlaylistRecord,
@@ -157,8 +158,12 @@ export class IdbSearchCacheReader implements SearchCacheReader {
         // Mapped once every request in the transaction has its result.
         tx.oncomplete = () => {
           if (!settle()) return;
+          if (!succeeded) {
+            reject(new SearchCacheError(mode === 'readwrite' ? 'write_failed' : 'read_failed'));
+            return;
+          }
           try {
-            resolve(succeeded ? map(request.result) : undefined as T);
+            resolve(map(request.result));
           } catch {
             reject(new SearchCacheError('record_invalid'));
           }

@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { gzipSync, strToU8 } from 'fflate';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
@@ -283,6 +284,22 @@ describe('fetchMaybeGzipText', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(compressed)));
 
     await expect(fetchMaybeGzipText('http://host/guide.xml.gz')).resolves.toBe(xmltv);
+  });
+
+  it('keeps the timeout active while reading the response body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: RequestInit) => ({
+      ok: true,
+      arrayBuffer: () => new Promise<ArrayBuffer>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')));
+      }),
+    } as unknown as Response)));
+
+    const p = fetchMaybeGzipText('http://host/guide.xml.gz', 5000)
+      .then(() => 'resolved', (e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(Promise.race([p, Promise.resolve('still-pending')]))
+      .resolves.toMatchObject({ message: 'Aborted' });
   });
 });
 

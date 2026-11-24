@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   flatMapPolyfill,
@@ -376,5 +377,131 @@ describe('installAbortController (fetch cancellation polyfill)', () => {
     const native = globalThis.AbortController;
     await import('./polyfills');
     expect(globalThis.AbortController).toBe(native);
+  });
+
+  it('aborts response.text() when signaled after headers arrive', async () => {
+    stubMissingAbortController();
+    const cancel = vi.fn(async () => {});
+    const response = {
+      ok: true,
+      status: 200,
+      text: () => new Promise<string>(() => {}),
+      body: { getReader: () => ({ read: vi.fn(), cancel }), cancel },
+    } as unknown as Response;
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+    await import('./polyfills');
+
+    const controller = new AbortController();
+    const res = await fetch('http://host/a', { signal: controller.signal });
+    const textPromise = res.text();
+    controller.abort();
+
+    await expect(Promise.race([textPromise, Promise.resolve().then(() => 'still-pending')]))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('rejects an in-flight stream reader.read() on abort instead of resolving done: true', async () => {
+    stubMissingAbortController();
+    let finishPendingRead!: (result: ReadableStreamReadResult<Uint8Array>) => void;
+    const cancel = vi.fn(async () => {
+      finishPendingRead?.({ value: undefined, done: true });
+    });
+    const read = vi.fn()
+      .mockResolvedValueOnce({ value: new Uint8Array([65]), done: false })
+      .mockImplementationOnce(() => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+        finishPendingRead = resolve;
+      }));
+    const response = {
+      ok: true,
+      status: 200,
+      body: { getReader: () => ({ read, cancel, releaseLock: vi.fn(), closed: Promise.resolve() }), cancel },
+    } as unknown as Response;
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+    await import('./polyfills');
+
+    const controller = new AbortController();
+    const res = await fetch('http://host/a', { signal: controller.signal });
+    const reader = res.body!.getReader();
+    await expect(reader.read()).resolves.toEqual({ value: new Uint8Array([65]), done: false });
+
+    const pendingRead = reader.read();
+    controller.abort();
+
+    await expect(Promise.race([pendingRead, Promise.resolve().then(() => 'still-pending')]))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('delegates reader cancel and releaseLock without WebIDL illegal invocation on real Response', async () => {
+    stubMissingAbortController();
+    const real = new Response('hello');
+    vi.stubGlobal('fetch', vi.fn(async () => real));
+    await import('./polyfills');
+
+    const controller = new AbortController();
+    const res = await fetch('http://host/a', { signal: controller.signal });
+    const reader = res.body!.getReader();
+    expect(res.body!.locked).toBe(true);
+    await expect(reader.cancel()).resolves.toBeUndefined();
+    reader.releaseLock();
+  });
+
+  it('removes the abort listener when response.text() throws synchronously', async () => {
+    stubMissingAbortController();
+    const cancel = vi.fn(async () => {});
+    const response = {
+      ok: true,
+      status: 200,
+      text: () => { throw new Error('sync boom'); },
+      body: { getReader: () => ({ read: vi.fn(), cancel }), cancel },
+    } as unknown as Response;
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+    await import('./polyfills');
+
+    const controller = new AbortController();
+    const res = await fetch('http://host/a', { signal: controller.signal });
+    await expect(res.text()).rejects.toThrow('sync boom');
+
+    controller.abort();
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it('aborts fetchLimitedText mid-body under the polyfill on timeout or caller abort', async () => {
+    stubMissingAbortController();
+    vi.useFakeTimers();
+    try {
+      const stalledStreamResponse = () => {
+        const cancel = vi.fn(async () => {});
+        const read = vi.fn()
+          .mockResolvedValueOnce({ value: new TextEncoder().encode('#EXTM3U\n'), done: false })
+          .mockImplementationOnce(() => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}));
+        return {
+          ok: true,
+          status: 200,
+          body: { getReader: () => ({ read, cancel, releaseLock: vi.fn(), closed: Promise.resolve() }), cancel },
+        } as unknown as Response;
+      };
+      vi.stubGlobal('fetch', vi.fn(async () => stalledStreamResponse()));
+      await import('./polyfills');
+      const { fetchLimitedText } = await import('./utils/fetch-helper');
+
+      const caller = new AbortController();
+      const aborted = fetchLimitedText('http://host/a', 1024, 5000, caller.signal)
+        .then(() => 'resolved', (e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      caller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(Promise.race([aborted, Promise.resolve('still-pending')]))
+        .resolves.toMatchObject({ code: 'aborted' });
+
+      const timedOut = fetchLimitedText('http://host/a', 1024, 5000)
+        .then(() => 'resolved', (e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(Promise.race([timedOut, Promise.resolve('still-pending')]))
+        .resolves.toMatchObject({ code: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

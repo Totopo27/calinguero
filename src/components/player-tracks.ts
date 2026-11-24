@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   AudioOption,
@@ -112,6 +113,7 @@ export class PlayerTracks {
   private vodAssSidecars: SidecarSubtitle[] = []; // the ASS/SSA sidecars of the current VOD item
   private activeAssIndex = -1; // index into vodAssSidecars currently shown (-1 = none)
   private subsOverlay: SubtitleSearchOverlay | null = null; // online subtitle search overlay
+  private subsRequestSeq = 0;
   private subtitleOffsetS = 0; // per-stream subtitle timing offset (seconds; + = later)
   private offsetOverlay: SubtitleOffsetOverlay | null = null;
 
@@ -138,6 +140,8 @@ export class PlayerTracks {
     this.lunaAudioPicked = false;
     this.lunaAudioSeq++;
     this.unavailableSubs.clear();
+    this.subsRequestSeq++;
+    this.subsOverlay?.close();
     this.subs.stop();
     this.dashSubs.stop();
     this.clearVodSubtitles();
@@ -177,6 +181,8 @@ export class PlayerTracks {
   }
 
   stop(): void {
+    this.subsRequestSeq++;
+    this.subsOverlay?.close();
     this.subs.stop();
     this.dashSubs.stop();
     this.clearVodSubtitles();
@@ -216,6 +222,7 @@ export class PlayerTracks {
    *  view transition (App.showView) so it never lingers over another view or
    *  reappears when its player view is shown again. */
   closeSubtitleSearch(): void {
+    this.subsRequestSeq++;
     this.subsOverlay?.close();
   }
 
@@ -306,7 +313,7 @@ export class PlayerTracks {
     this.subsOverlay = new SubtitleSearchOverlay(
       container,
       (result) => void this.applyOnlineSubtitle(result),
-      () => { /* closed */ },
+      () => { this.subsRequestSeq++; },
       (query) => void this.runSubtitleSearch(query),
     );
     return this.subsOverlay;
@@ -345,13 +352,14 @@ export class PlayerTracks {
     const overlay = this.ensureSubsOverlay();
     const vod = this.options.getVod();
     if (!overlay || !vod) return;
+    const seq = ++this.subsRequestSeq;
     if (query != null) overlay.setQuery(query);
     overlay.showStatus(t('subtitle.searching'));
     try {
       const base = this.buildSubtitleQuery(vod);
       const search = query != null ? { ...base, manualQuery: query } : base;
       const results = await subtitleSearchService.search(search);
-      if (this.options.getVod() !== vod) return;
+      if (seq !== this.subsRequestSeq || !overlay.visible || this.options.getVod() !== vod) return;
       if (!results.length) {
         overlay.showStatus(t('subtitle.noneFound'));
         return;
@@ -359,6 +367,7 @@ export class PlayerTracks {
       overlay.open(results, subtitleSearchService.preferredLanguage());
     } catch (e) {
       log.warn('subtitle search failed:', e);
+      if (seq !== this.subsRequestSeq || !overlay.visible || this.options.getVod() !== vod) return;
       overlay.showStatus(t('subtitle.searchFailed'));
     }
   }
@@ -367,10 +376,11 @@ export class PlayerTracks {
     const overlay = this.subsOverlay;
     const vod = this.options.getVod();
     if (!vod) return;
+    const seq = ++this.subsRequestSeq;
     overlay?.showStatus(t('subtitle.downloading'));
     try {
       const download = await subtitleSearchService.download(result);
-      if (this.options.getVod() !== vod) return; // the user switched items mid-download — don't apply/persist to the wrong VOD
+      if (seq !== this.subsRequestSeq || (overlay && !overlay.visible) || this.options.getVod() !== vod) return; // the user switched items or dismissed mid-download — don't apply/persist to the wrong VOD
       const cacheKey = `${result.providerId}:${result.id}`;
       void setCachedSubtitle(cacheKey, download.text);
       StorageService.setPickedOnlineSub(vod.accountId, vod.kind, vod.itemId, {
@@ -409,6 +419,7 @@ export class PlayerTracks {
       }));
     } catch (e) {
       log.warn('online subtitle download failed:', e);
+      if (seq !== this.subsRequestSeq || (overlay && !overlay.visible) || this.options.getVod() !== vod) return;
       overlay?.showStatus(t('subtitle.downloadFailed'), true);
     }
   }

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 // src/components/subtitle-search-overlay.test.ts
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { SubtitleSearchOverlay } from './subtitle-search-overlay';
@@ -323,6 +324,23 @@ describe('SubtitleSearchOverlay', () => {
     overlay.handleAction('back');
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(overlay.visible).toBe(false);
+    container.remove();
+  });
+
+  it('resets a dirty search input value when setQuery opens a different VOD item', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const overlay = new SubtitleSearchOverlay(container, vi.fn(), vi.fn(), vi.fn());
+    overlay.open([res({ id: 'a' })], '', 'Movie Alpha');
+    const input = container.querySelector<HTMLInputElement>('.subs-search-input')!;
+    input.value = 'Custom query';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    overlay.close();
+
+    overlay.setQuery('Movie Bravo');
+    overlay.showStatus('Searching…');
+
+    expect(container.querySelector<HTMLInputElement>('.subs-search-input')!.value).toBe('Movie Bravo');
     container.remove();
   });
 });

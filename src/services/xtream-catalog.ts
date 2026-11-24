@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { PlaylistEntry, VodCategory, VodItem, VodInfo, SeriesCategory, SeriesItem, SeriesInfo } from '../types';
 import {
   createXtreamClient,
@@ -248,7 +249,7 @@ async function cachedList<T>(
   if (data.length || result.state || allowEmpty) {
     await storeList(key, result);
     log.debug('fetched', key, `(${data.length})`);
-    notifyListWritten(key);
+    if (generation === catalogCacheGeneration()) notifyListWritten(key);
     return data;
   }
   log.warn(
@@ -294,7 +295,7 @@ async function syncedList<T>(
   const timestamp = await storeList(key, result);
   if (timestamp === null) return null;
   log.debug('synced', key, `(${listCount(result)})`);
-  notifyListWritten(key);
+  if (generation === catalogCacheGeneration()) notifyListWritten(key);
   return { store: CATALOG_STORE, key, timestamp };
 }
 
@@ -305,9 +306,10 @@ async function cachedItem<T>(
   signal: AbortSignal | undefined,
   refetch: () => Promise<T | null>,
 ): Promise<T | null> {
-  ensureActive(signal);
+  const generation = catalogCacheGeneration();
+  ensureCatalogActive(generation, signal);
   const cached = await getCachedCatalog<T>(key);
-  ensureActive(signal);
+  ensureCatalogActive(generation, signal);
   if (cached && fresh(cached.timestamp)) { log.debug('hit', key); return cached.data; }
   let data: T | null;
   try {
@@ -326,7 +328,7 @@ async function cachedItem<T>(
     }
     throw err;
   }
-  ensureActive(signal);
+  ensureCatalogActive(generation, signal);
   if (data) {
     await setCachedCatalog(key, data, StorageService.getXtreamCatalogRefreshIntervalMs());
     log.debug('fetched', key);

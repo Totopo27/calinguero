@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { parseWebVTT } from '../utils/webvtt';
 import { FetchTextError, fetchFailureReason } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
@@ -7,6 +8,7 @@ import { WebVttCueTrack } from './webvtt-cue-track';
 const log = createLogger('HlsSubs');
 
 const POLL_MS = 2000;        // subtitle media playlist target-duration is ~2s
+const FETCH_TIMEOUT_MS = 8000;
 const WINDOW = 15;           // only the most recent N segments (~30s); playlists can hold hours
 const CUE_RETENTION_S = 30;  // drop cues this far behind the playhead
 const CALIB_REMEASURE_MS = 6000;  // re-sample the reconstructed startDate this often (averaged)
@@ -45,7 +47,8 @@ export interface HlsSubtitlesOptions {
 export class HlsSubtitles {
   private video: HTMLVideoElement | null = null;
   private cueTrack = new WebVttCueTrack();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private abortController: AbortController | null = null;
   private seen = new Set<string>();
   private subsUrl = '';
   private gen = 0;            // bumped on stop(); in-flight async bails when it changes
@@ -87,6 +90,7 @@ export class HlsSubtitles {
   ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
+    const signal = (this.abortController = new AbortController()).signal;
     this.video = video;
     this.clock = options.clock ?? null;
     this.clockEdge = null;
@@ -103,9 +107,9 @@ export class HlsSubtitles {
       let masterText = options.masterText;
       let masterBase = masterUrl;
       if (masterText === undefined) {
-        const res = await fetchOk(masterUrl);
+        const res = await fetchTextOk(masterUrl, signal);
         if (gen !== this.gen) return;
-        masterText = await res.text();
+        masterText = res.text;
         masterBase = res.url;
       }
       const rend = pickSubtitleRendition(masterText, want);
@@ -126,7 +130,7 @@ export class HlsSubtitles {
       this.cueTrack.attach(video, t('player.subtitles'), rend.lang || 'und', this.clock ?? undefined);
       log.info('subtitles on:', 'format=webvtt', `index=${String(rend.index)}`);
       await this.refresh(gen);
-      this.timer = setInterval(() => void this.refresh(gen), POLL_MS);
+      this.schedulePoll(gen);
     } catch (e) {
       if (gen !== this.gen) return;
       this._active = false;
@@ -138,7 +142,11 @@ export class HlsSubtitles {
   stop(): void {
     this.gen++;
     this._active = false;
-    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
     this.cueTrack.disable();
     this.seen.clear();
     this.addedKeys.clear();
@@ -146,17 +154,32 @@ export class HlsSubtitles {
     // Keep the shared cue track so the next start on this element reuses it.
   }
 
+  private schedulePoll(gen: number): void {
+    if (gen !== this.gen || !this._active) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.poll(gen);
+    }, POLL_MS);
+  }
+
+  private async poll(gen: number): Promise<void> {
+    await this.refresh(gen);
+    this.schedulePoll(gen);
+  }
+
   private async refresh(gen: number): Promise<void> {
     if (gen !== this.gen || !this.video || !this.track) return;
+    const signal = this.abortController?.signal;
     try {
-      const res = await fetchOk(this.subsUrl);
+      const res = await fetchTextOk(this.subsUrl, signal);
       if (gen !== this.gen || !this.track) return;
-      const pl = parseMediaPlaylist(await res.text());
+      const pl = parseMediaPlaylist(res.text);
       if (pl.unsupported) {
         // fMP4/IMSC or encrypted WebVTT — a text fetch can't decode it, so stop
         // polling and say why (otherwise it silently renders nothing forever).
         log.info('subtitles: cannot self-render this rendition —', pl.unsupported);
-        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
         this._active = false;
         this.report(pl.unsupported);
         return;
@@ -183,7 +206,7 @@ export class HlsSubtitles {
         this.seen.add(seg.uri);
         const segMedia = wallToMediaSeconds(anchor, seg.pdtMs);
         if (segMedia < ct - 4) continue; // already played past the playhead — don't fetch it
-        const segRes = await fetch(new URL(seg.uri, base).href);
+        const segRes = await fetchTextStatus(new URL(seg.uri, base).href, signal);
         if (gen !== this.gen || !this.track) return;
         if (!segRes.ok) {
           // Live CDNs often refuse the newest or oldest segment for a moment; only
@@ -192,7 +215,7 @@ export class HlsSubtitles {
           if (gen !== this.gen) return;
           continue;
         }
-        const vtt = await segRes.text();
+        const vtt = segRes.text;
         if (gen !== this.gen || !this.track) return;
         const { mapLocal, cues } = parseWebVTT(vtt);
         if (!cues.length) continue;
@@ -345,9 +368,9 @@ export class HlsSubtitles {
     if (this.calibAt && Date.now() - this.calibAt < CALIB_REMEASURE_MS) return;
     this.calibAt = Date.now();
     try {
-      const res = await fetch(this.videoVariantUrl);
+      const res = await fetchTextStatus(this.videoVariantUrl, this.abortController?.signal);
       if (gen !== this.gen || !this.video || !v.seekable.length) return;
-      const segs = parseMediaPlaylist(await res.text()).segs;
+      const segs = parseMediaPlaylist(res.text).segs;
       const oldest = oldestPdt(segs);
       if (oldest == null) {
         this.videoHasNoPdt = true;
@@ -484,12 +507,41 @@ export function isPermanentSubtitleFailure(reason: string): boolean {
     || reason === 'no_pdt' || reason === 'fmp4' || reason === 'encrypted' || reason === 'no_rendition';
 }
 
-async function fetchOk(url: string): Promise<Response> {
-  const res = await fetch(url);
+async function fetchTextStatus(
+  url: string,
+  parentSignal?: AbortSignal,
+): Promise<{ ok: boolean; status: number; url: string; text: string }> {
+  const reqController = new AbortController();
+  let timedOut = false;
+  const onParentAbort = () => reqController.abort();
+  if (parentSignal?.aborted) reqController.abort();
+  else parentSignal?.addEventListener('abort', onParentAbort);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    reqController.abort();
+  }, FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: reqController.signal });
+    const text = res.ok ? await res.text() : '';
+    return { ok: res.ok, status: res.status, url: res.url, text };
+  } catch (err) {
+    if (timedOut) throw new FetchTextError('timeout', 'Request timed out');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener('abort', onParentAbort);
+  }
+}
+
+async function fetchTextOk(
+  url: string,
+  parentSignal?: AbortSignal,
+): Promise<{ text: string; url: string }> {
+  const res = await fetchTextStatus(url, parentSignal);
   if (!res.ok) {
     throw new FetchTextError('http', `HTTP ${String(res.status)}`, res.status);
   }
-  return res;
+  return { text: res.text, url: res.url };
 }
 
 

@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { HlsSubtitles, wallToMediaSeconds, newestPdt, oldestPdt, lowPercentile, cueKey, parseMediaPlaylist, pickVideoVariant, planSameTextMerges, isPermanentSubtitleFailure } from './hls-subtitles';
 
@@ -409,6 +410,67 @@ describe('HlsSubtitles with an external clock', () => {
       expect(isPermanentSubtitleFailure('segment_http_404')).toBe(false);
       expect(isPermanentSubtitleFailure('http_404')).toBe(true);
       subs.stop();
+    });
+
+    it('serializes polling so a slow playlist fetch never overlaps', async () => {
+      let holdPlaylist = false;
+      let releasePlaylist!: () => void;
+      const fetchMock = vi.fn((url: string) => {
+        if (holdPlaylist && url === 'http://host/s.m3u8') {
+          return new Promise((resolve) => {
+            releasePlaylist = () => resolve({ ok: true, status: 200, url, text: async () => PLAYLIST });
+          });
+        }
+        const map: Record<string, string> = {
+          'http://host/a.m3u8': MASTER,
+          'http://host/s.m3u8': PLAYLIST,
+          'http://host/s0.vtt': 'WEBVTT\n',
+          'http://host/s1.vtt': CUE_VTT,
+        };
+        return Promise.resolve({ ok: true, status: 200, url, text: async () => map[url] ?? '' });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { video } = placeholder();
+      const subs = new HlsSubtitles();
+      await subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+
+      const beforeSlow = fetchMock.mock.calls.filter(([u]) => u === 'http://host/s.m3u8').length;
+      holdPlaylist = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(4000);
+      const duringSlow = fetchMock.mock.calls.filter(([u]) => u === 'http://host/s.m3u8').length;
+      expect(duringSlow).toBe(beforeSlow + 1);
+
+      holdPlaylist = false;
+      releasePlaylist();
+      await vi.advanceTimersByTimeAsync(0);
+      subs.stop();
+    });
+
+    it('aborts in-flight fetches when stop() is called', async () => {
+      let capturedSignal: AbortSignal | null | undefined;
+      const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+        if (url === 'http://host/a.m3u8') {
+          return Promise.resolve({ ok: true, status: 200, url, text: async () => MASTER });
+        }
+        capturedSignal = opts?.signal;
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')));
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { video } = placeholder();
+      const subs = new HlsSubtitles();
+
+      const starting = subs.start(video, 'http://host/a.m3u8', { name: 'l1' }, { clock: () => 500 });
+      for (let i = 0; i < 10 && !capturedSignal; i++) await Promise.resolve();
+      expect(capturedSignal).toBeDefined();
+      expect(capturedSignal!.aborted).toBe(false);
+
+      subs.stop();
+      await starting;
+      expect(capturedSignal!.aborted).toBe(true);
     });
   });
 

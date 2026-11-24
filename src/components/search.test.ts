@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { PlaylistEntry, Programme } from '../types';
 import type { SearchIndexPersistRequest, SearchIndexRequest, SearchQueryRequest, SearchQueryResponse } from '../workers/tasks';
@@ -2753,6 +2754,77 @@ describe('Search', () => {
     expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, undefined);
   });
 
+  it('ignores Xtream archive resolution if Search is deactivated mid-load', async () => {
+    const now = Date.now();
+    const channel = {
+      ...chan('Alpha'),
+      catchupSource: '{utc}',
+      catchupAccountId: 'x1',
+      catchupStreamId: '101',
+    };
+    playlistMock.channels = [channel];
+    epgMock.programmes = { Alpha: [prog('Past Report', now - 120000, now - 60000)] };
+    let releaseArchive!: (days: Set<number> | null) => void;
+    archiveMock.load.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseArchive = resolve;
+    }));
+    archiveMock.isAvailable.mockReturnValue(true);
+    const { view, handlers } = await openWith();
+    await view.setQuery('past');
+    container.querySelector<HTMLElement>('.search-program-row')!
+      .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    view.deactivate();
+
+    releaseArchive(new Set([0]));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handlers.onPlayChannel).not.toHaveBeenCalled();
+  });
+
+  it('drops an earlier Xtream archive activation when superseded on the same query', async () => {
+    const now = Date.now();
+    const channel = {
+      ...chan('Alpha'),
+      catchupSource: '{utc}',
+      catchupAccountId: 'x1',
+      catchupStreamId: '101',
+    };
+    playlistMock.channels = [channel];
+    epgMock.programmes = {
+      Alpha: [
+        prog('Past First', now - 240000, now - 180000),
+        prog('Past Second', now - 120000, now - 60000),
+      ],
+    };
+    let releaseFirst!: (days: Set<number> | null) => void;
+    let releaseSecond!: (days: Set<number> | null) => void;
+    archiveMock.load
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseSecond = resolve; }));
+    archiveMock.isAvailable.mockReturnValue(true);
+
+    const { view, handlers } = await openWith();
+    await view.setQuery('past');
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('.search-program-row'));
+    rows[0].dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    rows[1].dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+
+    releaseFirst(new Set([0]));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handlers.onPlayChannel).not.toHaveBeenCalled();
+
+    releaseSecond(new Set([0]));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handlers.onPlayChannel).toHaveBeenCalledTimes(1);
+    expect(handlers.onPlayChannel).toHaveBeenCalledWith(0, expect.objectContaining({ title: 'Past Second' }));
+  });
+
   it('toggles a reminder for a future program', async () => {
     const now = Date.now();
     const channel = chan('Alpha');
@@ -2913,6 +2985,26 @@ describe('Search', () => {
     await view.setQuery('movie');
 
     expect(container.textContent).toContain('Alpha Movie');
+  });
+
+  it('preserves the programmes scroll node when channels-rail appears above it', async () => {
+    const now = Date.now();
+    playlistMock.channels = [chan('Other')];
+    epgMock.programmes = {
+      Other: [prog('Alpha Hour', now - 1800_000, now + 1800_000)],
+    };
+    const { view } = await openWith();
+    await view.setQuery('alpha');
+    const progScrollBefore = container.querySelector('[data-search-virtual="programmes"]');
+    expect(progScrollBefore).not.toBeNull();
+    expect(container.querySelector('[data-search-virtual="channels-rail"]')).toBeNull();
+
+    playlistMock.channels = [chan('Alpha'), chan('Other')];
+    await view.refreshChannels();
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-search-virtual="channels-rail"]')).not.toBeNull());
+
+    expect(container.querySelector('[data-search-virtual="programmes"]')).toBe(progScrollBefore);
   });
 });
 

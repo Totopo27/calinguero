@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { parseMpd } from '../parsers/mpd-manifest';
 import type { DashSubtitleSegment, ManifestSubtitle } from '../types';
 import { parseWebVTT } from '../utils/webvtt';
@@ -7,13 +8,23 @@ import { WebVttCueTrack } from './webvtt-cue-track';
 
 const log = createLogger('DashSubs');
 const POLL_MS = 2000;
+const FETCH_TIMEOUT_MS = 8000;
 const CUE_RETENTION_S = 30;
+
+interface FetchedText {
+  ok: boolean;
+  status: number;
+  url: string;
+  text: string;
+}
 
 export class DashSubtitles {
   private video: HTMLVideoElement | null = null;
   private cueTrack = new WebVttCueTrack();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private abortController: AbortController | null = null;
   private seen = new Set<string>();
+  private inFlight = new Set<string>();
   private gen = 0;
   private _active = false;
   private clock: (() => number) | null = null;
@@ -38,6 +49,7 @@ export class DashSubtitles {
   ): Promise<void> {
     this.stop();
     const gen = ++this.gen;
+    this.abortController = new AbortController();
     this.video = video;
     this.clock = clock ?? null;
     this.manifestText = manifestText;
@@ -50,13 +62,9 @@ export class DashSubtitles {
       this.cueTrack.attach(video, t('player.subtitles'), subtitle.lang || 'und', this.clock ?? undefined);
       log.info('subtitles on:', 'format=webvtt', 'source=dash');
       await this.refresh(manifestUrl, want, gen);
-      if (gen === this.gen) {
-        this.timer = setInterval(
-          () => void this.refresh(manifestUrl, want, gen),
-          POLL_MS,
-        );
-      }
+      this.schedulePoll(manifestUrl, want, gen);
     } catch (e) {
+      if (gen !== this.gen) return;
       this._active = false;
       log.warn('subtitles start failed:', e);
     }
@@ -66,11 +74,61 @@ export class DashSubtitles {
     this.gen++;
     this._active = false;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
+    }
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
     }
     this.cueTrack.disable();
     this.seen.clear();
+    this.inFlight.clear();
+  }
+
+  private schedulePoll(
+    manifestUrl: string,
+    want: { name?: string; lang?: string } | undefined,
+    gen: number,
+  ): void {
+    if (gen !== this.gen || !this._active) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.poll(manifestUrl, want, gen);
+    }, POLL_MS);
+  }
+
+  private async poll(
+    manifestUrl: string,
+    want: { name?: string; lang?: string } | undefined,
+    gen: number,
+  ): Promise<void> {
+    await this.refresh(manifestUrl, want, gen);
+    this.schedulePoll(manifestUrl, want, gen);
+  }
+
+  private async fetchTextWithAbort(
+    url: string,
+    headers?: Record<string, string>,
+  ): Promise<FetchedText> {
+    const parentSignal = this.abortController?.signal;
+    const reqController = new AbortController();
+    const onParentAbort = () => reqController.abort();
+    if (parentSignal?.aborted) reqController.abort();
+    else parentSignal?.addEventListener('abort', onParentAbort);
+    const timer = setTimeout(() => reqController.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const init: RequestInit = headers
+        ? { headers, signal: reqController.signal }
+        : { signal: reqController.signal };
+      const res = await fetch(url, init);
+      const text = res.ok ? await res.text() : '';
+      return { ok: res.ok, status: res.status, url: res.url, text };
+    } finally {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', onParentAbort);
+    }
   }
 
   private now(): number {
@@ -93,9 +151,9 @@ export class DashSubtitles {
     let text = this.manifestText;
     let base = manifestUrl;
     if (text === undefined) {
-      const res = await fetch(manifestUrl);
+      const res = await this.fetchTextWithAbort(manifestUrl);
       if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-      text = await res.text();
+      text = res.text;
       base = res.url;
     }
     const now = this.now();
@@ -137,12 +195,17 @@ export class DashSubtitles {
         segment.range ? `${segment.url}|${segment.range}` : segment.url));
       for (const segment of relevant) {
         const key = segment.range ? `${segment.url}|${segment.range}` : segment.url;
-        if (this.seen.has(key)) continue;
-        const response = segment.range
-          ? await fetch(segment.url, {
-              headers: { Range: `bytes=${segment.range}` },
-            })
-          : await fetch(segment.url);
+        if (this.seen.has(key) || this.inFlight.has(key)) continue;
+        this.inFlight.add(key);
+        let response: FetchedText;
+        try {
+          response = await this.fetchTextWithAbort(
+            segment.url,
+            segment.range ? { Range: `bytes=${segment.range}` } : undefined,
+          );
+        } finally {
+          this.inFlight.delete(key);
+        }
         if (!response.ok) {
           if (gen !== this.gen) return;
           // Segments of an MPD only the service could read go out without its
@@ -155,7 +218,7 @@ export class DashSubtitles {
           }
           throw new Error(`HTTP ${String(response.status)}`);
         }
-        const parsed = parseWebVTT(await response.text());
+        const parsed = parseWebVTT(response.text);
         if (gen !== this.gen || !this.cueTrack.current) return;
         this.seen.add(key);
         this.loadedSegment = true;

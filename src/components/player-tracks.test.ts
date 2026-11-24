@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import type { Channel, VodPlayback } from '../types';
 import { channelKey } from '../utils/channel';
@@ -1581,6 +1582,49 @@ describe('PlayerTracks', () => {
       expect(subtitleSearchServiceMock.search).toHaveBeenCalledWith(
         expect.objectContaining({ manualQuery: 'Manual Query' }),
       );
+      host.remove();
+    });
+
+    it('keeps the overlay closed when a dismissed search resolves or rejects later', async () => {
+      subtitleSearchServiceMock.setAvailable(true);
+      const host = document.createElement('div');
+      host.id = 'subtitle-search';
+      document.body.appendChild(host);
+      vod = vodRequest({ title: 'Video 1' });
+
+      let resolveSearch!: (r: unknown[]) => void;
+      subtitleSearchServiceMock.search.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSearch = resolve as typeof resolveSearch;
+      }));
+      const opening = tracks.openSubtitleSearch();
+      expect(tracks.isSubtitleSearchOpen()).toBe(true);
+      tracks.handleAction('back');
+      expect(tracks.isSubtitleSearchOpen()).toBe(false);
+
+      resolveSearch([{
+        providerId: 'subdl',
+        id: '1',
+        language: 'l1',
+        releaseName: 'Track 1',
+        fileName: 'a.srt',
+        format: 'srt',
+        hearingImpaired: false,
+        downloads: 0,
+      }]);
+      await opening;
+      expect(tracks.isSubtitleSearchOpen()).toBe(false);
+      expect(host.classList.contains('hidden')).toBe(true);
+
+      let rejectSearch!: (err: Error) => void;
+      subtitleSearchServiceMock.search.mockImplementationOnce(() => new Promise((_, reject) => {
+        rejectSearch = reject;
+      }));
+      const failing = tracks.openSubtitleSearch();
+      tracks.handleAction('back');
+      rejectSearch(new Error('network'));
+      await failing;
+      expect(tracks.isSubtitleSearchOpen()).toBe(false);
+      expect(host.classList.contains('hidden')).toBe(true);
       host.remove();
     });
 

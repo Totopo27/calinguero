@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
@@ -1373,6 +1374,21 @@ describe('ChannelList morph lifecycle', () => {
     // The morph keeps the ring the scope painted, with no pass in between.
     expect(channelItems()[1].classList.contains('focused')).toBe(true);
     expect(ringed(channelItems()[1])).toBe(true);
+  });
+
+  it('preserves group-list node identity when playlist tabs appear', () => {
+    playlistMock.playlistTabs = [{ id: 'p1', name: 'Playlist 1' }];
+    list.render();
+    const groupsBefore = container.querySelector('.group-list');
+    expect(groupsBefore).not.toBeNull();
+
+    playlistMock.playlistTabs = [
+      { id: 'p1', name: 'Playlist 1' },
+      { id: 'p2', name: 'Xtream 1' },
+    ];
+    list.render();
+
+    expect(container.querySelector('.group-list')).toBe(groupsBefore);
   });
 });
 

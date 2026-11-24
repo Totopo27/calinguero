@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   NumberEvent,
@@ -82,6 +83,7 @@ export class EpgGrid {
   private focusCol: FocusCol = 'channels';
   private focusProg = 0;
   private resumePrompt = new CatchupResumePrompt('prompt.epg');
+  private archiveActivationSeq = 0;
   private archiveLoadingKey = '';
   private loadingChannels = false;
   private readonly channelVirtualizer = new VirtualList({
@@ -548,7 +550,7 @@ export class EpgGrid {
         <div class="epg-main">
           <div class="epg-channels-pane ${this.focusCol === 'channels' || this.focusCol === 'playlists' || this.focusCol === 'filters' ? 'pane-focused' : ''}">
             ${showTabs ? html`
-              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists">
+              <div class="playlist-tabs epg-playlist-tabs" id="epg-playlists" data-key="epg-playlists">
                 <div class="playlist-tab ${!this.selectedPlaylist ? 'active' : ''}"
                      data-key="epg-tab:"
                      data-playlist="" data-playlist-index="0" data-hover-target>${t('common.all')}</div>
@@ -559,7 +561,7 @@ export class EpgGrid {
                 `)}
               </div>
             ` : ''}
-            <div class="epg-filter-bar">
+            <div class="epg-filter-bar" data-key="epg-filter-bar">
               <div class="epg-group-control">
                 <button type="button"
                         class="epg-filter-control epg-group-button ${this.selectedGroup !== 'builtin:all' ? 'active' : ''}"
@@ -603,13 +605,13 @@ export class EpgGrid {
                        placeholder="${t('common.search')}" value="${this.searchQuery}">
               </label>
             </div>
-            <div class="epg-channel-pane-header">
+            <div class="epg-channel-pane-header" data-key="epg-channel-pane-header">
               <span class="epg-channel-pane-count">${tp('channel.count', visibleChannels.length)}</span>
               <span class="epg-page-info">${channel?.name ?? ''}${programmes.length
                 ? html` · ${tp('epg.programCount', programmes.length)}`
                 : ''}</span>
             </div>
-            <div class="epg-channel-list" id="epg-channels">
+            <div class="epg-channel-list" id="epg-channels" data-key="epg-channels">
             ${visibleChannels.length ? html`
               <div class="epg-virtual-spacer"
                    style="height:${this.channelVirtualizer.getTotalSize(visibleChannels.length)}px">
@@ -1169,9 +1171,20 @@ export class EpgGrid {
     // or without the id its URL needs) opens the channel live.
     if (isPast && channel?.catchupAccountId && channel.catchupStreamId && hasCatchup(channel)
         && (!!prog.catchupId || !catchupNeedsId(channel))) {
+      const seq = ++this.archiveActivationSeq;
       const channelIndex = this.selectedChannelIdx;
+      const progIndex = this.focusProg;
       await XtreamArchiveService.load(channel);
-      if (PlaylistService.channels[channelIndex] !== channel) return;
+      if (seq !== this.archiveActivationSeq
+        || !inShownView(this.container)
+        || this.focusCol !== 'programmes'
+        || this.groupOpen
+        || PlaylistService.channels[channelIndex] !== channel
+        || this.selectedChannelIdx !== channelIndex
+        || this.focusProg !== progIndex
+        || this.getCurrentProgrammes()[progIndex] !== prog) {
+        return;
+      }
       this.render();
       if (!XtreamArchiveService.isAvailable(channel, startMs, Date.now(), prog.catchupId)) {
         showToast(t('epg.catchupUnavailable'));

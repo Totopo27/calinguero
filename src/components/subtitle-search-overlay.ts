@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { Action } from '../types';
 import type { OnlineSubtitleResult } from '../services/subtitle-search/types';
 import { html, inShownView, raw } from '../utils/dom';
@@ -93,6 +94,12 @@ export class SubtitleSearchOverlay {
       } else if (e.key === 'ArrowDown' || e.key === 'Escape') {
         e.preventDefault();
         t.blur();
+      }
+    });
+    this.el.addEventListener('input', (e: Event) => {
+      const target = e.target;
+      if (target instanceof HTMLInputElement && target.classList.contains('subs-search-input')) {
+        this.query = target.value;
       }
     });
   }
@@ -265,5 +272,9 @@ export class SubtitleSearchOverlay {
         ${body}
       </div>
     `);
+    const input = this.inputEl();
+    if (input && !this.inputFocused() && input.value !== this.query) {
+      input.value = this.query;
+    }
   }
 }

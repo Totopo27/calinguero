@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   BuiltinChannelGroup,
@@ -86,6 +87,7 @@ export class Sidebar {
   readonly focusScope: FocusScope;
   private lastWheelAt = 0;
   private opening = false;
+  private recentCatchupSeq = 0;
   private readonly channelVirtualizer = new VirtualList({
     itemSize: CHANNEL_ROW_STRIDE,
     overscan: CHANNEL_OVERSCAN,
@@ -259,6 +261,7 @@ export class Sidebar {
   }
 
   hide(): void {
+    this.recentCatchupSeq++;
     if (!this.isVisible) return;
     this.isVisible = false;
     Focus.pop(this.focusScope);
@@ -1377,7 +1380,13 @@ export class Sidebar {
   private async playRecentCatchup(
     item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>,
   ): Promise<void> {
+    const seq = ++this.recentCatchupSeq;
     const catchup = await RecentlyWatchedService.catchupInfo(item);
+    if (seq !== this.recentCatchupSeq
+      || !this.isVisible
+      || PlaylistService.channels[item.channelIndex] !== item.channel) {
+      return;
+    }
     if (!catchup) {
       showToast(t('channel.catchupUnavailable'));
       this.render();

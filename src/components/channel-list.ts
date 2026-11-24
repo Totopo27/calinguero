@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   BuiltinChannelGroup,
@@ -13,7 +14,7 @@ import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { KeyHandler } from '../navigation/key-handler';
 import { InputMode } from '../navigation/input-mode';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
-import { html, raw, type Safe } from '../utils/dom';
+import { html, inShownView, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { channelKey, groupDisplayLabel } from '../utils/channel';
 import { formatPosition } from '../utils/time';
@@ -95,6 +96,7 @@ export class ChannelList {
   private previewFocused = false;
   private playingCatchupStart: number | null = null;
   private recentItems: RecentlyWatchedItem[] = [];
+  private recentCatchupSeq = 0;
   private footerReturnRow: string | null = null;
   private failedLogos = new Set<string>();
   private readonly channelVirtualizer = new VirtualList({
@@ -385,7 +387,7 @@ export class ChannelList {
           ? 'has-channel-hints'
           : ''}">
         <div class="sidebar" data-nav-container data-nav-straight data-nav-leave-down="">
-          <div class="sidebar-header">
+          <div class="sidebar-header" data-key="sidebar-header">
             <div class="channel-count">${
               this.loadingChannels && !totalChannels ? '' : tp('channel.count', totalChannels)}</div>
             ${editing || showingRecent
@@ -399,7 +401,7 @@ export class ChannelList {
               `}
           </div>
           ${showTabs ? html`
-            <div class="playlist-tabs" data-edge-scroll>
+            <div class="playlist-tabs" data-key="playlist-tabs" data-edge-scroll>
               <div class="playlist-tab ${!this.currentPlaylist ? 'active' : ''}"
                    data-key="tab:"
                    data-focusable data-playlist="">${t('common.all')}</div>
@@ -410,7 +412,7 @@ export class ChannelList {
               `)}
             </div>
           ` : ''}
-          <div class="group-list">
+          <div class="group-list" data-key="group-list">
             <div class="group-list-spacer"
                  style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">
               ${groups.slice(groupRange.start, groupRange.end).map((g, offset) =>
@@ -1151,7 +1153,13 @@ export class ChannelList {
   }
 
   private async playRecentCatchup(item: Extract<RecentlyWatchedItem, { kind: 'catchup' }>): Promise<void> {
+    const seq = ++this.recentCatchupSeq;
     const catchup = await RecentlyWatchedService.catchupInfo(item);
+    if (seq !== this.recentCatchupSeq
+      || !inShownView(this.container)
+      || PlaylistService.channels[item.channelIndex] !== item.channel) {
+      return;
+    }
     if (!catchup) {
       showToast(t('channel.catchupUnavailable'));
       this.render();

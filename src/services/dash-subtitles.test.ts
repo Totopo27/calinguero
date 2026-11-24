@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, expect, it, vi } from 'vitest';
 import { DashSubtitles, cueMediaTime, pickWebVttSubtitle } from './dash-subtitles';
 
@@ -82,7 +83,9 @@ describe('DashSubtitles helpers', () => {
 
     await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
 
-    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt');
+    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt', {
+      signal: expect.any(Object),
+    });
     expect(cues).toEqual([{ startTime: 21, endTime: 22, text: 'Alpha' }]);
     expect(track.mode).toBe('showing');
     service.stop();
@@ -150,7 +153,9 @@ describe('DashSubtitles helpers', () => {
     }).refresh('http://host/stream.mpd', { lang: 'l1' },
       (service as unknown as { gen: number }).gen);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt');
+    expect(fetchMock).toHaveBeenCalledWith('http://host/sub-20.vtt', {
+      signal: expect.any(Object),
+    });
     expect(tracks[0].cues).toEqual([expect.objectContaining({ startTime: 21, endTime: 22, text: 'Alpha' })]);
     service.stop();
     vi.useRealTimers();
@@ -259,6 +264,7 @@ describe('DashSubtitles helpers', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('http://host/subs.vtt', {
       headers: { Range: 'bytes=100-199' },
+      signal: expect.any(Object),
     });
     service.stop();
     vi.useRealTimers();
@@ -322,5 +328,187 @@ describe('DashSubtitles helpers', () => {
     service.stop();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('serializes polling so a slow fetch never overlaps or duplicates cues', async () => {
+    vi.useFakeTimers();
+    try {
+      let segmentTime = 20;
+      const manifest = () => `<?xml version="1.0"?><MPD
+        xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic">
+        <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+          <SegmentTemplate media="sub-$Time$.vtt" timescale="1">
+            <SegmentTimeline><S t="${String(segmentTime)}" d="4"/></SegmentTimeline>
+          </SegmentTemplate>
+          <Representation id="s1"/>
+        </AdaptationSet></Period></MPD>`;
+      let releaseSlowSegment!: () => void;
+      const fetchMock = vi.fn((url: string) => {
+        if (url === 'http://host/sub-24.vtt') {
+          return new Promise((resolve) => {
+            releaseSlowSegment = () => resolve({
+              ok: true,
+              status: 200,
+              url,
+              text: async () => 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBravo\n',
+            });
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          url,
+          text: async () => url.endsWith('.mpd')
+            ? manifest()
+            : 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      vi.stubGlobal('VTTCue', class {
+        constructor(
+          public startTime: number,
+          public endTime: number,
+          public text: string,
+        ) {}
+      });
+      const cues: Array<{ startTime: number; endTime: number; text: string }> = [];
+      const track = {
+        mode: 'disabled',
+        cues,
+        addCue: (cue: { startTime: number; endTime: number; text: string }) => cues.push(cue),
+        removeCue: (cue: { startTime: number }) => {
+          const index = cues.indexOf(cue as typeof cues[number]);
+          if (index >= 0) cues.splice(index, 1);
+        },
+      };
+      const video = {
+        currentTime: 20,
+        seekable: { length: 1, start: () => segmentTime, end: () => segmentTime + 4 },
+        addTextTrack: () => track,
+      } as unknown as HTMLVideoElement;
+      const service = new DashSubtitles();
+
+      await service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
+      segmentTime = 24;
+      video.currentTime = 24;
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(fetchMock.mock.calls.filter(([url]) => url === 'http://host/sub-24.vtt')).toHaveLength(1);
+
+      releaseSlowSegment();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cues.filter(c => c.text === 'Bravo')).toHaveLength(1);
+      service.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('aborts in-flight fetches when stop() is called', async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedSignal: AbortSignal | null | undefined;
+      const fetchMock = vi.fn((_url: string, opts?: RequestInit) => {
+        capturedSignal = opts?.signal;
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')));
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const video = {
+        currentTime: 0,
+        addTextTrack: () => ({ mode: 'disabled', cues: [], addCue: () => {}, removeCue: () => {} }),
+      } as unknown as HTMLVideoElement;
+      const service = new DashSubtitles();
+
+      const starting = service.start(video, 'http://host/stream.mpd', { lang: 'l1' });
+      await Promise.resolve();
+      expect(capturedSignal).toBeDefined();
+      expect(capturedSignal!.aborted).toBe(false);
+
+      service.stop();
+      await starting;
+      expect(capturedSignal!.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not clobber a newer active start when an older aborted start fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const manifest = `<?xml version="1.0"?><MPD
+        xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic">
+        <Period><AdaptationSet contentType="text" mimeType="text/vtt" lang="l1">
+          <SegmentTemplate media="sub-$Time$.vtt" timescale="1">
+            <SegmentTimeline><S t="20" d="4"/></SegmentTimeline>
+          </SegmentTemplate>
+          <Representation id="s1"/>
+        </AdaptationSet></Period></MPD>`;
+      let rejectOldStart!: (err: Error) => void;
+      let releaseNewVtt!: () => void;
+      let calls = 0;
+      const fetchMock = vi.fn((url: string) => {
+        calls++;
+        if (calls === 1) {
+          return new Promise((_resolve, reject) => {
+            rejectOldStart = reject;
+          });
+        }
+        if (url === 'http://host/sub-20.vtt' && calls <= 4) {
+          return new Promise((resolve) => {
+            releaseNewVtt = () => resolve({
+              ok: true,
+              status: 200,
+              url,
+              text: async () => 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
+            });
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          url,
+          text: async () => url.endsWith('.mpd')
+            ? manifest
+            : 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlpha\n',
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      vi.stubGlobal('VTTCue', class {
+        constructor(
+          public startTime: number,
+          public endTime: number,
+          public text: string,
+        ) {}
+      });
+      const video = {
+        currentTime: 20,
+        seekable: { length: 1, start: () => 20, end: () => 24 },
+        addTextTrack: () => ({ mode: 'disabled', cues: [], addCue: () => {}, removeCue: () => {} }),
+      } as unknown as HTMLVideoElement;
+      const service = new DashSubtitles();
+
+      const oldStart = service.start(video, 'http://host/old.mpd', { lang: 'l1' });
+      const newStart = service.start(video, 'http://host/new.mpd', { lang: 'l1' });
+      for (let i = 0; i < 10 && !releaseNewVtt; i++) await Promise.resolve();
+      rejectOldStart(new DOMException('Aborted', 'AbortError'));
+      await oldStart;
+      releaseNewVtt();
+      await newStart;
+
+      expect(service.active).toBe(true);
+      const countBeforePoll = fetchMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(countBeforePoll);
+      service.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });

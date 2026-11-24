@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 // Runtime polyfills for APIs missing on webOS 4 (Chromium 53):
 // - Object.entries / Object.values (Chrome 54): app and EPG object iteration.
 // - String.prototype.padStart (Chrome 57): time, URL and settings formatting.
@@ -147,6 +148,124 @@ function abortError(): Error {
   }
 }
 
+function cancelBodyQuietly(body: unknown): void {
+  if (!body || typeof (body as { cancel?: unknown }).cancel !== 'function') return;
+  try {
+    const result = (body as { cancel: () => unknown }).cancel();
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch(() => {});
+    }
+  } catch {
+    // Stream may already be locked or closed.
+  }
+}
+
+function abortablePromise<T>(
+  signal: AbortSignal,
+  cancelTarget: unknown,
+  start: () => Promise<T>,
+): Promise<T> {
+  if (signal.aborted) {
+    cancelBodyQuietly(cancelTarget);
+    return Promise.reject(abortError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      cancelBodyQuietly(cancelTarget);
+      reject(abortError());
+    };
+    signal.addEventListener('abort', onAbort);
+    let pending: Promise<T>;
+    try {
+      pending = Promise.resolve(start());
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      reject(error);
+      return;
+    }
+    pending.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        if (signal.aborted) reject(abortError());
+        else resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function wrapAbortableReader(
+  nativeReader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): ReadableStreamDefaultReader<Uint8Array> {
+  return {
+    get closed() {
+      return nativeReader.closed;
+    },
+    cancel: (reason?: unknown) => nativeReader.cancel(reason),
+    releaseLock: () => nativeReader.releaseLock(),
+    read: () => abortablePromise(signal, nativeReader, () => nativeReader.read()),
+  } as ReadableStreamDefaultReader<Uint8Array>;
+}
+
+function wrapAbortableResponse(response: Response, signal: AbortSignal): Response {
+  if (!response || (typeof response !== 'object' && typeof response !== 'function')) {
+    return response;
+  }
+  const nativeBody = (response as { body?: ReadableStream<Uint8Array> | null }).body;
+  const methods = ['text', 'json', 'arrayBuffer', 'blob'] as const;
+  for (const methodName of methods) {
+    const record = response as unknown as Record<string, unknown>;
+    const orig = record[methodName];
+    if (typeof orig !== 'function') continue;
+    const desc = Object.getOwnPropertyDescriptor(response, methodName);
+    if (desc && desc.configurable === false) continue;
+    Object.defineProperty(response, methodName, {
+      configurable: true,
+      writable: true,
+      value: (...args: unknown[]) => abortablePromise(
+        signal,
+        nativeBody,
+        () => (orig as (...a: unknown[]) => Promise<unknown>).apply(response, args),
+      ),
+    });
+  }
+  if (nativeBody && typeof nativeBody.getReader === 'function') {
+    const bodyDesc = Object.getOwnPropertyDescriptor(response, 'body');
+    if (!bodyDesc || bodyDesc.configurable !== false) {
+      const wrappedBody = {
+        get locked() {
+          return nativeBody.locked;
+        },
+        cancel: (reason?: unknown) => nativeBody.cancel(reason),
+        getReader: (...args: unknown[]) => {
+          const reader = (nativeBody.getReader as (...a: unknown[]) => ReadableStreamDefaultReader<Uint8Array>)
+            .apply(nativeBody, args);
+          return wrapAbortableReader(reader, signal);
+        },
+      } as ReadableStream<Uint8Array>;
+      Object.defineProperty(response, 'body', {
+        configurable: true,
+        get: () => wrappedBody,
+      });
+    }
+  }
+  return response;
+}
+
 function installAbortController(): void {
   if (typeof AbortController !== 'undefined') return;
   const scope = self as unknown as {
@@ -172,7 +291,12 @@ function installAbortController(): void {
       nativeFetch(input, rest).then(
         response => {
           signal.removeEventListener('abort', onAbort);
-          resolve(response);
+          if (signal.aborted) {
+            cancelBodyQuietly(response?.body);
+            reject(abortError());
+            return;
+          }
+          resolve(wrapAbortableResponse(response, signal));
         },
         error => {
           signal.removeEventListener('abort', onAbort);

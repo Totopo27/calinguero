@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { CatchupProgressEntry } from '../types';
 
@@ -931,6 +932,24 @@ describe('EpgGrid morph lifecycle', () => {
     expect(clicks).toBe(1);
     expect(hovers).toBe(1);
   });
+
+  it('preserves search input and channel list nodes when playlist tabs appear', () => {
+    state.playlistTabs = [{ id: 'p1', name: 'Playlist 1' }];
+    grid.render();
+    const inputBefore = container.querySelector('.epg-search-input');
+    const listBefore = container.querySelector('#epg-channels');
+    expect(inputBefore).not.toBeNull();
+    expect(listBefore).not.toBeNull();
+
+    state.playlistTabs = [
+      { id: 'p1', name: 'Playlist 1' },
+      { id: 'p2', name: 'Xtream 1' },
+    ];
+    grid.render();
+
+    expect(container.querySelector('.epg-search-input')).toBe(inputBefore);
+    expect(container.querySelector('#epg-channels')).toBe(listBefore);
+  });
 });
 
 describe('EpgGrid reminders', () => {
@@ -1240,6 +1259,45 @@ describe('EpgGrid non-catchup channel selection', () => {
 
       expect(onSelect).not.toHaveBeenCalled();
       expect(toastMock).toHaveBeenCalledWith("This program isn't available for catch-up.");
+    });
+
+    it('ignores Xtream archive resolution if focus moves or the guide hides mid-load', async () => {
+      state.channels = [{
+        name: 'Chan A',
+        url: 'http://host/a',
+        catchupSource: 'http://host/catchup/{start}',
+        catchupAccountId: 'x1',
+        catchupStreamId: '101',
+      }];
+      let releaseArchive!: (days: Set<number> | null) => void;
+      archiveMock.getCached.mockReturnValue(null);
+      archiveMock.load.mockImplementationOnce(() => new Promise((resolve) => {
+        releaseArchive = resolve;
+      }));
+      archiveMock.isAvailable.mockReturnValue(true);
+      grid.render();
+      grid.handleAction('right');
+      grid.handleAction('select');
+      grid.handleAction('down'); // moved off Morning while XtreamArchiveService.load is pending
+
+      releaseArchive(new Set([0]));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onSelect).not.toHaveBeenCalled();
+
+      archiveMock.load.mockImplementationOnce(() => new Promise((resolve) => {
+        releaseArchive = resolve;
+      }));
+      grid.handleAction('up');
+      grid.handleAction('select');
+      container.classList.add('view', 'hidden');
+
+      releaseArchive(new Set([0]));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onSelect).not.toHaveBeenCalled();
     });
   });
 

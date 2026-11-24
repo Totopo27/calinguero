@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+// NOTICE: Modified for the Calinguero project in 2026.
+import { describe, it, expect, vi } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { firstSubtitleFromZip, firstSubtitleBytesFromZip } from './unzip';
+import {
+  MAX_SUBTITLE_ARCHIVE_BYTES,
+  MAX_SUBTITLE_ENTRY_BYTES,
+  firstSubtitleFromZip,
+  firstSubtitleBytesFromZip,
+} from './unzip';
 
 describe('firstSubtitleFromZip', () => {
   it('returns the first subtitle entry decoded as text', async () => {
@@ -32,5 +38,24 @@ describe('firstSubtitleBytesFromZip', () => {
 
   it('returns null when there is no subtitle entry', async () => {
     expect(await firstSubtitleBytesFromZip(zipSync({ 'a.txt': strToU8('x') }))).toBeNull();
+  });
+
+  it('rejects an archive exceeding MAX_SUBTITLE_ARCHIVE_BYTES without extracting', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const oversized = new Uint8Array(MAX_SUBTITLE_ARCHIVE_BYTES + 1);
+    expect(await firstSubtitleBytesFromZip(oversized)).toBeNull();
+    expect(await firstSubtitleFromZip(oversized)).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('rejects a subtitle entry exceeding MAX_SUBTITLE_ENTRY_BYTES (zip bomb protection)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const payload = new Uint8Array(MAX_SUBTITLE_ENTRY_BYTES + 64 * 1024);
+    const bomb = zipSync({ 'bomb.srt': payload }, { level: 9 });
+    expect(bomb.byteLength).toBeLessThan(MAX_SUBTITLE_ARCHIVE_BYTES);
+
+    expect(await firstSubtitleBytesFromZip(bomb)).toBeNull();
+    expect(await firstSubtitleFromZip(bomb)).toBeNull();
+    warn.mockRestore();
   });
 });

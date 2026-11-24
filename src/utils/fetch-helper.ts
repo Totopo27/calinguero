@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 export type FetchTextErrorCode =
   | 'aborted'
   | 'timeout'
@@ -199,15 +200,23 @@ export async function fetchLimitedText(
 }
 
 export async function fetchMaybeGzipText(url: string, timeout = 30000): Promise<string> {
-  const response = await fetchWithTimeout(url, {}, timeout);
-  let bytes = new Uint8Array(await response.arrayBuffer());
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
 
-  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    const { gunzipSync } = await import('fflate');
-    bytes = gunzipSync(bytes);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    let bytes = new Uint8Array(await response.arrayBuffer());
+
+    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      const { gunzipSync } = await import('fflate');
+      bytes = gunzipSync(bytes);
+    }
+
+    return new TextDecoder().decode(bytes);
+  } finally {
+    clearTimeout(timer);
   }
-
-  return new TextDecoder().decode(bytes);
 }
 
 export async function fetchWithRetry(
