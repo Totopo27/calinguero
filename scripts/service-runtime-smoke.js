@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 'use strict';
 
 var fs = require('fs');
@@ -282,10 +283,14 @@ function manifestFetchSmoke() {
   var registerManifestFetchService =
     require(path.join(buildDir, 'fetch', 'service')).registerManifestFetchService;
   var handler = null;
+  var strictHandler = null;
   registerManifestFetchService({
     register: function (name, h) { if (name === 'fetchManifest') handler = h; },
+  }, 'com.example.app', { allowLoopback: true });
+  registerManifestFetchService({
+    register: function (name, h) { if (name === 'fetchManifest') strictHandler = h; },
   }, 'com.example.app');
-  if (!handler) throw new Error('fetchManifest was not registered');
+  if (!handler || !strictHandler) throw new Error('fetchManifest was not registered');
   var playlist = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv1.m3u8\n';
   var origin = http.createServer(function (req, res) {
     if (req.url === '/a') {
@@ -336,6 +341,24 @@ function manifestFetchSmoke() {
       return call('com.example.app', { url: 'file:///a' });
     }).then(function (rejected) {
       if (rejected.errorCode !== 'bad_url') throw new Error('fetchManifest accepted a file URL');
+      return new Promise(function (resolveStrict) {
+        strictHandler({ sender: 'com.example.app', payload: { url: base + '/a' }, respond: resolveStrict });
+      });
+    }).then(function (blockedIp) {
+      if (blockedIp.errorCode !== 'blocked') {
+        throw new Error('fetchManifest accepted a loopback IP by default: ' + JSON.stringify(blockedIp));
+      }
+      return new Promise(function (resolveStrict) {
+        strictHandler({
+          sender: 'com.example.app',
+          payload: { url: base.replace('127.0.0.1', 'localhost') + '/a' },
+          respond: resolveStrict,
+        });
+      });
+    }).then(function (blockedHost) {
+      if (blockedHost.errorCode !== 'blocked') {
+        throw new Error('fetchManifest accepted localhost by default: ' + JSON.stringify(blockedHost));
+      }
     });
   }).then(function () {
     origin.close();

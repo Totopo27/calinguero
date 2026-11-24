@@ -1,4 +1,8 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { createKeepAlive, type ActivityManagerLike } from './keep-alive';
 import { registerLanService } from './lan/service';
 
@@ -77,5 +81,47 @@ describe('LAN service keepAlive', () => {
     handlers.stop({ respond: () => undefined });
     await tick();
     expect(manager.live.size).toBe(0);
+  });
+
+  it('denies foreign callers on LAN Luna methods when appId is configured and allows the app', async () => {
+    const manager = fakeManager();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lan-svc-auth-'));
+    fs.writeFileSync(path.join(dir, 'sample.m3u'), '#EXTM3U\n#EXTINF:-1,Ch\nhttp://host/a\n');
+    fs.writeFileSync(path.join(dir, 'sample.json'), '{"id":"sample","name":"Sample","count":1,"createdAt":1}');
+    const handlers: Record<string, (msg: {
+      sender?: string;
+      isSubscription?: boolean;
+      respond: (r: unknown) => void;
+    }) => void> = {};
+    try {
+      (registerLanService as (s: unknown, d: string, appId?: string) => void)(
+        { register: (method: string, handler: typeof handlers[string]) => { handlers[method] = handler; }, activityManager: manager },
+        dir,
+        'com.example.app',
+      );
+      await tick();
+
+      const denied = { returnValue: false, errorCode: 'denied', errorText: 'Caller is not allowed' };
+      const call = (method: string, sender: string, isSubscription?: boolean) => {
+        let reply: unknown;
+        handlers[method]({ sender, isSubscription, respond: (r) => { reply = r; } });
+        return reply;
+      };
+
+      expect(call('start', 'com.example.other')).toEqual(denied);
+      expect(call('heartbeat', 'com.example.other')).toEqual(denied);
+      expect(call('serviceEvents', 'com.example.other', true)).toEqual(denied);
+      expect(call('stop', 'com.example.other')).toEqual(denied);
+      expect(manager.live.size).toBe(1);
+      expect(call('resetData', 'com.example.other')).toEqual(denied);
+      expect(fs.existsSync(path.join(dir, 'sample.m3u'))).toBe(true);
+
+      expect(call('heartbeat', 'com.example.app 1234')).toEqual({ running: true, port: 1234 });
+      expect(call('serviceEvents', 'com.example.app', true)).toEqual({ subscribed: true });
+      expect(call('resetData', 'com.example.app')).toEqual({ returnValue: true, reset: true, removed: 1 });
+      expect(fs.existsSync(path.join(dir, 'sample.m3u'))).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

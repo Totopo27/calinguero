@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // assjs is loaded lazily via a dynamic import inside `show`; stub the whole
@@ -142,5 +143,26 @@ describe('AssSubtitles', () => {
     expect(assInstances[0].delay).toBe(3);
     subs.setOffset(-1.5);
     expect(assInstances[0].delay).toBe(-1.5);
+  });
+
+  it('redacts credentials and tokens when logging an ASS sidecar without a display name', async () => {
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      fetchTextMock.mockResolvedValue('[Script Info]\n');
+      subs.attach(video, container, [sidecar({
+        name: '',
+        lang: '',
+        url: 'http://host/movie/u1/secretp1/10.ass?token=secrets1',
+      })]);
+
+      await subs.show(0);
+
+      const logged = infoSpy.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain('http://host/movie/***/***/10.ass?token=***');
+      expect(logged).not.toContain('secretp1');
+      expect(logged).not.toContain('secrets1');
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });

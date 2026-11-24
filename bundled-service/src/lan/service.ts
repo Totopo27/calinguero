@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * LAN feature — webOS service integration. Owns the shared HTTP server's
  * lifecycle (bind/rebind/teardown) and the Luna methods the in-app client
@@ -9,8 +10,10 @@
 import * as http from 'http';
 import { SetupActionStore } from '../setup/actions';
 import { SetupStateStore } from '../setup/state';
+import { UploadStore } from '../upload/store';
 import { startServer, type ServiceChangeEvent } from './server';
 import { createKeepAlive, type ActivityManagerLike } from '../keep-alive';
+import { isAppCaller, lunaFailure, senderShape, type CallerMsg } from '../luna-reply';
 import { createLogger } from '../logger';
 
 const log = createLogger('lan');
@@ -21,7 +24,7 @@ interface LunaService {
   activityManager: ActivityManagerLike;
 }
 
-type LunaMsg = {
+type LunaMsg = CallerMsg & {
   respond: (r: unknown) => void;
   isSubscription?: boolean;
   // Per webos-service: msg is an EventEmitter; clients dropping their end
@@ -34,12 +37,25 @@ type LunaMsg = {
 // Non-webOS fallback (e.g. local testing): start the HTTP server directly with
 // no Luna bus. There are no push subscribers off-device, so onChange is a no-op.
 export function startLanStandalone(dataDir: string): void {
-  startServer(0, dataDir, () => { /* no serviceEvents subscribers off-device */ })
-    .catch((err) => log.error('startServer failed:', err));
+  startServer(
+    0,
+    dataDir,
+    () => { /* no serviceEvents subscribers off-device */ },
+    new SetupActionStore(),
+    new SetupStateStore(),
+    { allowNullOrigin: false },
+  ).catch((err) => log.error('startServer failed:', err));
 }
 
 // Wire the shared LAN feature onto the Luna service.
-export function registerLanService(service: LunaService, dataDir: string): void {
+export function registerLanService(service: LunaService, dataDir: string, appId?: string): void {
+  function allowCaller(method: string, msg: LunaMsg): boolean {
+    if (!appId || isAppCaller(msg, appId)) return true;
+    log.warn(method + ' outcome=denied sender=' + senderShape(msg));
+    msg.respond(lunaFailure('denied', 'Caller is not allowed'));
+    return false;
+  }
+
   let server: http.Server | null = null;
   let actualPort: number | null = null;
   // Buffer for `start` messages that arrive before the HTTP server has finished
@@ -102,6 +118,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   ensureServer();
 
   service.register('start', (msg) => {
+    if (!allowCaller('start', msg)) return;
     log.info('start method invoked');
     if (actualPort !== null) {
       msg.respond({ running: true, port: actualPort });
@@ -115,6 +132,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   });
 
   service.register('heartbeat', (msg) => {
+    if (!allowCaller('heartbeat', msg)) return;
     msg.respond({ running: !!server, port: actualPort });
   });
 
@@ -124,6 +142,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   // a subsequent `start` rebinds via ensureServer() — Luna does NOT need
   // to respawn us.
   service.register('stop', (msg) => {
+    if (!allowCaller('stop', msg)) return;
     log.info('stop method invoked');
     // Drop all push subscribers — their connections are scoped to this
     // service lifetime and would be stale after a restart anyway.
@@ -146,6 +165,7 @@ export function registerLanService(service: LunaService, dataDir: string): void 
   // Push channel: clients subscribe once and the service calls
   // msg.respond({event}) whenever uploads mutate or a setup action is queued.
   service.register('serviceEvents', (msg) => {
+    if (!allowCaller('serviceEvents', msg)) return;
     if (msg.isSubscription) {
       if (subscribers.indexOf(msg) < 0) subscribers.push(msg);
       log.info('serviceEvents subscriber added, total=' + subscribers.length);
@@ -161,5 +181,15 @@ export function registerLanService(service: LunaService, dataDir: string): void 
       }
     }
     msg.respond({ subscribed: !!msg.isSubscription });
+  });
+
+  service.register('resetData', (msg) => {
+    if (!allowCaller('resetData', msg)) return;
+    log.info('resetData method invoked');
+    const removed = new UploadStore(dataDir).clear();
+    setupActions.clear();
+    setupState.clear();
+    if (removed > 0) broadcastChange('uploads-changed');
+    msg.respond({ returnValue: true, reset: true, removed });
   });
 }

@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Channel,
   ParsedPlaylist,
@@ -363,6 +364,18 @@ export class M3UStreamParser {
         'warning',
         'unrecognized-line',
         'Ignored a line that is not a stream location',
+        this.lineNo,
+      );
+      return;
+    }
+    if (!isAllowedStreamLocation(line)) {
+      if (this.catchup.inherit && this.droppedHasOwnCatchup()) this.endCatchupInheritance();
+      this.current = null;
+      this.clearPendingChannel();
+      this.addIssue(
+        'warning',
+        'unsupported-scheme',
+        'Ignored stream location with unsupported URL scheme',
         this.lineNo,
       );
       return;
@@ -787,10 +800,10 @@ function parseExtInf(body: string, catchup: CatchupContext | null = null): Chann
     attrs['tvg-name'] || displayName || attrs['tvg-id'] || 'Unknown',
   );
   channel.id = attrs['tvg-id'] || '';
-  channel.logo = attrs['tvg-logo'] || attrs.logo || '';
+  channel.logo = sanitizeHttpUrl(attrs['tvg-logo'] || attrs.logo || '');
   if (catchup) applyCatchupAttributes(channel, attrs, catchup);
   else applyCatchupAttributes(channel, attrs, { defaults: null, inherit: false, origin: 'none' });
-  const seekPreview = attrs.seek_preview || attrs['seek-preview'];
+  const seekPreview = sanitizeHttpUrl(attrs.seek_preview || attrs['seek-preview'] || '');
   if (seekPreview) channel.seekPreview = seekPreview;
   applyGroups(channel, attrs['group-title'] || UNCATEGORIZED_GROUP, false);
 
@@ -859,7 +872,7 @@ function archiveDays(attrs: Record<string, string>): ArchiveDays | null {
 function headerCatchupDefaults(header: Record<string, string>): CatchupDefaults | null {
   const [type, source] = copyRetainedStrings([
     header.catchup || header['catchup-type'] || '',
-    header['catchup-source'] || '',
+    sanitizeCatchupSource(header['catchup-source'] || ''),
   ]);
   const archive = archiveDays(header);
   const correction = header['catchup-correction'];
@@ -910,8 +923,8 @@ function applyCatchupAttributes(
   let source: string;
   if (marker) {
     type = attrs.catchup || attrs['catchup-type'] || '';
-    source = attrs['catchup-source'] || '';
-    if (!type && !source && defaults) {
+    source = sanitizeCatchupSource(attrs['catchup-source'] || '');
+    if (!type && !source && attrs['catchup-source'] === undefined && defaults) {
       type = defaults.type;
       source = defaults.source;
     }
@@ -932,7 +945,7 @@ function applyCatchupAttributes(
     channel.catchupDerived = true;
   }
   channel.catchup = type;
-  channel.catchupSource = source;
+  channel.catchupSource = sanitizeCatchupSource(source);
 }
 
 function clearCatchup(channel: Channel): void {
@@ -1310,7 +1323,7 @@ function collectEpgUrls(attributes: Record<string, string>): string[] {
   const urls: string[] = [];
   for (const key of ['url-tvg', 'x-tvg-url', 'tvg-url']) {
     for (const part of (attributes[key] || '').split(',')) {
-      const url = part.trim();
+      const url = sanitizeHttpUrl(part);
       if (url && !urls.includes(url)) urls.push(url);
     }
   }
@@ -1340,6 +1353,27 @@ function nameFromUrl(url: string): string {
   } catch {
     return 'Stream';
   }
+}
+
+const EXPLICIT_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const ALLOWED_STREAM_SCHEME = /^(?:https?|rtsps?|rtp|udp|rtmps?|mms[ht]?):$/i;
+
+function isAllowedStreamLocation(value: string): boolean {
+  if (/[\0-\x1f\x7f]/.test(value)) return false;
+  const match = EXPLICIT_SCHEME.exec(value);
+  return match ? ALLOWED_STREAM_SCHEME.test(match[0]) : true;
+}
+
+function sanitizeHttpUrl(value: string): string {
+  const trimmed = value.trim();
+  return /^https?:\/\/[^\s\0-\x1f\x7f]+$/i.test(trimmed) ? trimmed : '';
+}
+
+function sanitizeCatchupSource(value: string): string {
+  const trimmed = value.trim();
+  if (/[\0-\x1f\x7f]/.test(trimmed)) return '';
+  if (EXPLICIT_SCHEME.test(trimmed) && !/^https?:\/\//i.test(trimmed)) return '';
+  return trimmed;
 }
 
 function isPlaylistLocation(value: string): boolean {

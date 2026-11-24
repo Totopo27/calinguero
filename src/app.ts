@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import './polyfills';
 import './engine-quirks';
 import { CONFIG } from './config';
@@ -46,6 +47,7 @@ import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { applyAnimationMode } from './services/motion-service';
 import { channelKey } from './utils/channel';
+import { diagnosticStreamUrl } from './utils/url';
 import { isSourceEnabled, playlistLoadFraction } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide, afterNextPaint } from './utils/dom';
@@ -1044,10 +1046,17 @@ class App {
       if (superseded()) return;
       log.info('Channels loaded:', PlaylistService.channels.length,
         '| groups:', PlaylistService.groups.length,
-        '| epgSources:', PlaylistService.epgSources);
+        '| epgSources:', PlaylistService.epgSources.map(source => ({
+          ...source,
+          url: diagnosticStreamUrl(source.url),
+        })));
       const epgSources = this.epgSources();
-      if (epgSources.length) log.info('Using EPG sources:', epgSources);
-      else {
+      if (epgSources.length) {
+        log.info('Using EPG sources:', epgSources.map(source => ({
+          ...source,
+          url: diagnosticStreamUrl(source.url),
+        })));
+      } else {
         log.warn('No EPG sources configured');
         EpgService.reset();
       }
@@ -1999,6 +2008,8 @@ class App {
       return;
     }
     if (action === 'reset') {
+      ReminderService.clearAll();
+      await SetupClient.resetServiceData();
       await clearAllCachedData();
       await StorageService.clearUserData();
       StorageService.clearAll();

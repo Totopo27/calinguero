@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ChannelCustomizationService } from './channel-customization';
 
@@ -1736,4 +1737,30 @@ describe('EpgService channel pre-filter', () => {
       const id = EpgService.findChannelId(channel({ id: 'a', name: 'Alpha', playlistIds: ['a'] }));
       expect(EpgService.getProgrammeAtStart(id!, h(-1).getTime())?.title).toBe('Cached');
     });
+
+  it('redacts credentialed EPG source URLs across cache, fetch, and failure logs', async () => {
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const secretUrl = 'http://u1:secretp1@host/xmltv.php?username=u1&password=secretp1';
+      parseXMLTVMock.mockReturnValue(parsed('a', 'Alpha', 'Show'));
+      await EpgService.load([source(secretUrl, ['p1'])], [
+        channel({ id: 'a', name: 'Alpha', playlistIds: ['p1'] }),
+      ]);
+
+      vi.mocked(fetchMaybeGzipText).mockRejectedValueOnce(new Error('net fail'));
+      await EpgService.refresh();
+
+      const logged = [...infoSpy.mock.calls, ...warnSpy.mock.calls, ...errSpy.mock.calls]
+        .map(args => args.join(' '))
+        .join('\n');
+      expect(logged).toContain('***');
+      expect(logged).not.toContain('secretp1');
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
 });

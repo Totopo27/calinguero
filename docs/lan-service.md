@@ -1,3 +1,4 @@
+<!-- NOTICE: Modified for the Calinguero project in 2026. -->
 # LAN Setup Service
 
 A bundled webOS JS service that lets a phone or computer on the same LAN
@@ -35,12 +36,13 @@ Luna (called by the app's LAN/reminder/manifest clients and by Activity Manager)
 
 | Method | Subscribe? | Purpose |
 |---|---|---|
-| `start` | no | Bind the HTTP server; returns the bound port. Idempotent. |
-| `stop` | no | Close the HTTP server and release the keepAlive activity. |
-| `heartbeat` | no | Liveness probe; returns `{running, port}`. |
-| `serviceEvents` | **yes** | Push channel for `uploads-changed` and `setup-changed` events. |
-| `getDevMode` | no | Report whether Developer Mode is available for interactive reminder alerts. |
-| `fireReminderAlert` | no | Raise the Developer Mode reminder alert requested by Activity Manager. |
+| `start` | no | Bind the HTTP server; returns the bound port. Idempotent; app-only. |
+| `stop` | no | Close the HTTP server and release the keepAlive activity; app-only. |
+| `heartbeat` | no | Liveness probe; returns `{running, port}`; app-only. |
+| `serviceEvents` | **yes** | Push channel for `uploads-changed` and `setup-changed` events; app-only. |
+| `resetData` | no | Purge stored uploads, setup state, and queued setup actions on Reset App; app-only. |
+| `getDevMode` | no | Report whether Developer Mode is available for interactive reminder alerts; app-only. |
+| `fireReminderAlert` | no | Raise the Developer Mode reminder alert; app or Activity Manager only. |
 | `fetchManifest` | no | GET a stream's master playlist or MPD with the channel's HTTP headers; app-only. |
 | `openProxy` | no | Open a loopback proxy session that sends a stream's HTTP headers; app-only. |
 | `touchProxy` | no | Keep a loopback proxy session alive and report its last upstream status; app-only. |
@@ -61,10 +63,11 @@ HTTP (called by phones, and by the app for reconcile):
 | `/setup-actions` | GET | Loopback-only list consumed by the TV app. |
 | `/setup-actions/:id` | DELETE | Loopback-only acknowledgement from the TV app. |
 | `/setup-actions/:id?token=…` | GET | Phone-facing application status. |
-| `/uploads` | GET | List all stored uploads with serve-back URLs. |
+| `/uploads` | GET | List stored uploads; requires setup token unless called over loopback. |
 | `/uploads?name=foo.m3u&token=…` | POST | Save a playlist; fires `serviceEvents`. |
-| `/uploads/:id[.m3u]` | GET | Serve a stored playlist. |
+| `/uploads/:id[.m3u]` | GET | Loopback-only serve of a stored playlist for the TV app. |
 | `/uploads/:id?token=…` | DELETE | Remove an upload; loopback callers do not need the token. |
+| `/reset` | POST | Loopback-only purge of uploaded playlists, setup state, and queued actions on Reset App. |
 
 ## Manifest fetch
 
@@ -91,14 +94,15 @@ Request:
   in `-<digits>`. Any other caller gets `denied` without a request being
   made, and the service logs the denial with the caller's id, every digit
   replaced by `N`, and which lookup supplied it.
-- **URL:** `http:` and `https:` only.
+- **URL:** `http:` and `https:` only; loopback and unspecified targets fail with `blocked`.
 - **Headers:** the same set the app passes to `com.webos.media/load`: every
   header the playlist parser kept, minus hop-by-hop, framing, and routing
   headers (`Host`, `Connection`, `Content-Length`, `Transfer-Encoding`,
   `Proxy-*`, and the like) and `Accept-Encoding`. Names must be RFC 7230
   tokens and values free of CR, LF, and NUL; at most 32 headers. Cookie and
-  Authorization never go over https, as on the Luna path, and never follow
-  a redirect to another origin.
+  Authorization never go over https, as on the Luna path, and cross-origin
+  redirects keep only `Referer`, `User-Agent`, `Origin`, `Accept`, and
+  `Accept-Language`.
 - **User-Agent:** Node.js sends none of its own, and many origins refuse a
   request without one, so the app adds the TV's `navigator.userAgent`
   when the channel declares no User-Agent (matched case-insensitively).
@@ -116,7 +120,7 @@ Request:
 Success returns `{returnValue: true, status, url, text}`, where `url` is the
 final URL after redirects; the app resolves relative URIs against it.
 Failure returns `{returnValue: false, errorCode, errorText}`, plus `status`
-when a response arrived. `errorCode` is one of `bad_url`, `denied`,
+when a response arrived. `errorCode` is one of `bad_url`, `blocked`, `denied`,
 `timeout`, `too_large`, `too_many_redirects`, `network`, `decode`, or
 `http_NNN`. The service logs only the outcome and the status or error code,
 never the URL, headers, or body.
@@ -174,7 +178,7 @@ checked as for `fetchManifest`.
   `fetchManifest`; when the channel sets no User-Agent, the app supplies
   the TV's, as for `fetchManifest`. Cookie, Authorization, and URL credentials go only to
   the session's own origin and never over https; another origin gets
-  the rest. Of the client's headers only `Range`, `If-Range`, and
+  only `Referer`, `User-Agent`, `Origin`, `Accept`, and `Accept-Language`. Of the client's headers only `Range`, `If-Range`, and
   `Accept` (when the channel sets none) pass; its cookies never do.
   Hop-by-hop headers are dropped both ways, and upstream `Set-Cookie`
   never reaches the client. Cookies the session's jar stored are added
@@ -325,9 +329,11 @@ the short root URL manually. The public page exchanges that code for the full
 token; five failures from one client lock pairing for one minute.
 
 The token is required to submit source changes, query their status, upload M3U
-files, read the sanitized setup state, or remotely delete uploads. Publishing
-state and reading or acknowledging queued actions is loopback-only, which
-prevents another LAN client from injecting state or reading Xtream
+files, list uploaded playlists from a LAN client, read the sanitized setup state,
+or remotely delete uploads. Downloading raw `.m3u` upload bodies, publishing
+state, resetting stored uploads, and reading or acknowledging queued actions is
+loopback-only, which prevents another LAN client from injecting state, reading
+embedded playlist credentials, or reading Xtream
 credentials. Upload identifiers are validated before file access so requests
 cannot escape the upload directory. A new foreground bind creates a new token,
 pairing code, and URL, invalidating the old values.

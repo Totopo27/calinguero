@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as http from 'http';
 import type * as https from 'https';
@@ -213,25 +214,30 @@ describe('stream proxy', () => {
     expect(body).toContain('media="$Number$.m4s" initialization="init.mp4"');
   });
 
-  it('sends credentials only to the session origin, and the channel headers elsewhere', async () => {
+  it('sends credentials and custom headers only to the session origin, and safe playback headers elsewhere', async () => {
     const p = proxy();
     const url = await openOk(p, base.replace('http://', 'http://u:pw@') + '/cross.m3u8',
-      { Referer: 'http://ref/', Cookie: 'c=1', Authorization: 'Bearer t' });
+      { Referer: 'http://ref/', 'User-Agent': 'Agent 1', Cookie: 'c=1', Authorization: 'Bearer t', 'X-Api-Key': 'k1' });
     const prefix = url.slice(0, url.indexOf('/http/'));
     await request(url);
     const first = seen.find(s => s.url === '/cross.m3u8')!;
     expect(first.headers.cookie).toBe('c=1');
     expect(first.headers.authorization).toBe('Bearer t');
+    expect(first.headers['x-api-key']).toBe('k1');
     const redirected = seen.find(s => s.url === 'other/list.m3u8')!;
     expect(redirected.headers.referer).toBe('http://ref/');
+    expect(redirected.headers['user-agent']).toBe('Agent 1');
     expect(redirected.headers.cookie).toBeUndefined();
     expect(redirected.headers.authorization).toBeUndefined();
+    expect(redirected.headers['x-api-key']).toBeUndefined();
 
     seen.length = 0;
     await request(`${prefix}/http/${otherBase.slice(7)}/seg.ts`, { headers: { Cookie: 'client=1' } });
     expect(seen[0].headers.referer).toBe('http://ref/');
+    expect(seen[0].headers['user-agent']).toBe('Agent 1');
     expect(seen[0].headers.cookie).toBeUndefined();
     expect(seen[0].headers.authorization).toBeUndefined();
+    expect(seen[0].headers['x-api-key']).toBeUndefined();
   });
 
   it('never sends Cookie or Authorization over https', async () => {

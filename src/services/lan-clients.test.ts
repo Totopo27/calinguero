@@ -1,7 +1,8 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PlaylistEntry } from '../types';
 
-const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
+const { storageMock, fetchWithTimeoutMock, lunaMock } = vi.hoisted(() => ({
   storageMock: {
     playlists: [] as Array<Omit<PlaylistEntry, 'id'> & { id?: string }>,
     manualEpgSources: [] as Array<{ url: string; playlistIds: string[] }>,
@@ -26,6 +27,10 @@ const { storageMock, fetchWithTimeoutMock } = vi.hoisted(() => ({
     remove: vi.fn(),
   },
   fetchWithTimeoutMock: vi.fn(),
+  lunaMock: {
+    available: false,
+    request: vi.fn(),
+  },
 }));
 storageMock.getPlaylists.mockImplementation(() => storageMock.playlists);
 storageMock.setPlaylists.mockImplementation((next: typeof storageMock.playlists) => {
@@ -49,6 +54,10 @@ storageMock.setOnlineSubtitleConfig.mockImplementation(
 
 vi.mock('../services/storage-service', () => ({ StorageService: storageMock }));
 vi.mock('../utils/fetch-helper', () => ({ fetchWithTimeout: fetchWithTimeoutMock }));
+vi.mock('./luna', () => ({
+  isLunaAvailable: () => lunaMock.available,
+  lunaRequest: lunaMock.request,
+}));
 const guardedSourceIds = vi.hoisted(() => new Set<string>());
 vi.mock('../services/parental-control', () => ({
   ParentalControlService: {
@@ -56,6 +65,7 @@ vi.mock('../services/parental-control', () => ({
   },
 }));
 
+import { CONFIG } from '../config';
 import { setServicePort } from './service-http';
 import { SetupClient } from './setup-client';
 import { UploadClient, uploadIdFromUrl } from './upload-client';
@@ -87,6 +97,8 @@ beforeEach(() => {
   storageMock.setOnlineSubtitleConfig.mockClear();
   storageMock.remove.mockClear();
   fetchWithTimeoutMock.mockReset();
+  lunaMock.available = false;
+  lunaMock.request.mockReset();
   // Simulate the Luna `start` response that the app applies before any
   // LAN client call. Without this, serviceBase() returns null and all methods
   // no-op (which is the no-port path covered by its own describe block).
@@ -732,5 +744,64 @@ describe('LAN clients non-2xx handling', () => {
   it('list returns null on a 5xx response', async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({ error: 'oops' }, 500));
     await expect(UploadClient.list()).resolves.toBeNull();
+  });
+});
+
+describe('SetupClient.resetServiceData', () => {
+  it('calls Luna resetData when Luna is available and waits for settlement', async () => {
+    lunaMock.available = true;
+    lunaMock.request.mockImplementation((_uri: string, opts: { onSuccess?: () => void }) => {
+      opts.onSuccess?.();
+      return { cancel: vi.fn() };
+    });
+
+    await expect(SetupClient.resetServiceData()).resolves.toBeUndefined();
+
+    expect(lunaMock.request).toHaveBeenCalledWith(
+      `luna://${CONFIG.SERVICE_ID}`,
+      expect.objectContaining({ method: 'resetData', parameters: {} }),
+    );
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to POST /reset if Luna resetData fails, and posts /reset when HTTP port is known', async () => {
+    lunaMock.available = true;
+    lunaMock.request.mockImplementation((_uri: string, opts: { onFailure?: (err: unknown) => void }) => {
+      opts.onFailure?.({ returnValue: false, errorCode: -1 });
+      return { cancel: vi.fn() };
+    });
+    fetchWithTimeoutMock.mockResolvedValue(jsonResponse({ reset: true, removed: 1 }));
+
+    await expect(SetupClient.resetServiceData()).resolves.toBeUndefined();
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/reset',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      },
+      4000,
+    );
+  });
+
+  it('resolves cleanly on Luna timeout or when no service is reachable', async () => {
+    vi.useFakeTimers();
+    try {
+      lunaMock.available = true;
+      const cancel = vi.fn();
+      lunaMock.request.mockReturnValue({ cancel });
+      setServicePort(null);
+
+      const pending = SetupClient.resetServiceData();
+      await vi.advanceTimersByTimeAsync(3500);
+      await expect(pending).resolves.toBeUndefined();
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    lunaMock.available = false;
+    setServicePort(null);
+    await expect(SetupClient.resetServiceData()).resolves.toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Channel,
   ChannelOverride,
@@ -18,6 +19,7 @@ import { ChannelCustomizationService } from './channel-customization';
 import { channelKey } from '../utils/channel';
 import { StorageService } from './storage-service';
 import { catchupNeedsIdUncached } from '../utils/catchup-url';
+import { diagnosticStreamUrl } from '../utils/url';
 
 const log = createLogger('EPG');
 
@@ -497,7 +499,7 @@ class EpgServiceImpl {
           result: await this.restoreCachedSource(source, revision),
         };
       } catch (err) {
-        log.warn('Cache read failed:', source.url, err);
+        log.warn('Cache read failed:', diagnosticStreamUrl(source.url), err);
         return { source, result: 'missing' as const };
       }
     }));
@@ -911,7 +913,7 @@ class EpgServiceImpl {
     try {
       cached = await this.restoreCachedSource(source, revision);
     } catch (err) {
-      log.warn('Cache read failed:', source.url, err);
+      log.warn('Cache read failed:', diagnosticStreamUrl(source.url), err);
     }
     if (cached === 'fresh') return;
     if (cached === 'stale') this.publish(revision, onDataPublished);
@@ -992,7 +994,7 @@ class EpgServiceImpl {
       );
     }
     if (fresh) {
-      log.info('Loaded cache:', source.url, '|', Object.keys(filtered.data.programmes).length,
+      log.info('Loaded cache:', diagnosticStreamUrl(source.url), '|', Object.keys(filtered.data.programmes).length,
         'channels with programmes, age', Math.round(age / 60000), 'min');
     }
     return fresh ? 'fresh' : 'stale';
@@ -1019,7 +1021,7 @@ class EpgServiceImpl {
       this.channelIdsByName.delete(source.url);
       return true;
     }
-    const done = log.time(`fetch '${source.url}'`);
+    const done = log.time(`fetch '${diagnosticStreamUrl(source.url)}'`);
     let result: ParsedEpg | null = null;
     try {
       const loaded = await fetchAndParseXMLTV(source.url, 120000, filter
@@ -1042,7 +1044,7 @@ class EpgServiceImpl {
       // An empty parse is usually a transient upstream response; neither cache
       // it nor let it replace programmes already loaded for this source.
       if (programmeCount === 0 && this.hasProgrammes(source.url)) {
-        log.warn('EPG has 0 programmes — keeping the previous data:', source.url);
+        log.warn('EPG has 0 programmes — keeping the previous data:', diagnosticStreamUrl(source.url));
         done();
         return false;
       }
@@ -1060,7 +1062,7 @@ class EpgServiceImpl {
         return false;
       }
       if (onDataPublished) this.publish(revision, onDataPublished);
-      log.info('Loaded', source.url, '|', Object.keys(result.channels).length, 'channels,',
+      log.info('Loaded', diagnosticStreamUrl(source.url), '|', Object.keys(result.channels).length, 'channels,',
         programmeCount, 'programmes', filter ? `(of ${String(stats.programmesSeen)} seen)` : '');
       if (truncated) {
         // Caching it under the full filter would make `covers()` report the
@@ -1086,12 +1088,12 @@ class EpgServiceImpl {
           for (const listener of epgWriteListeners) listener(source.url);
         }
       } else {
-        log.warn('EPG has 0 programmes — not caching:', source.url);
+        log.warn('EPG has 0 programmes — not caching:', diagnosticStreamUrl(source.url));
       }
       done();
       return !truncated;
     } catch (err) {
-      log.error('Failed to load EPG:', source.url, err);
+      log.error('Failed to load EPG:', diagnosticStreamUrl(source.url), err);
       done();
       return false;
     } finally {

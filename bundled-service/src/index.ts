@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * Bundled webOS JS service for the IPTV player — thin entry point.
  *
@@ -60,9 +61,11 @@ if (Service) {
   try {
     const service = new Service(SERVICE_ID);
     log.info('registered with Luna as ' + SERVICE_ID);
-    registerLanService(service, DATA_DIR);
-    registerReminderService(service);
-    registerManifestFetchService(service, APP_ID);
+    registerLanService(service, DATA_DIR, APP_ID);
+    registerReminderService(service, APP_ID);
+    registerManifestFetchService(service, APP_ID, {
+      allowLoopback: process.env.IPTV_PROXY_ALLOW_LOOPBACK === '1',
+    });
     registerProxyService(service, APP_ID);
     registerAspectService(service, APP_ID, anonymousLunaCall());
   } catch (e) {

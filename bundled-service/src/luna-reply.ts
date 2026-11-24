@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * Luna replies for the methods only the app may call: the caller check, a
  * one-shot responder, and the failure shape.
@@ -70,6 +71,12 @@ export function isAppCaller(msg: CallerMsg, appId: string): boolean {
   const suffix = (separator: string): boolean =>
     sender.value.indexOf(appId + separator) === 0 && /^\d+$/.test(sender.value.slice(appId.length + 1));
   return sender.source === 'senderServiceName' ? suffix('-') : suffix(' ');
+}
+
+/** Whether a Luna message comes from a named webOS system service without an app id. */
+export function isServiceCaller(msg: CallerMsg, serviceName: string): boolean {
+  if (!serviceName || ls2Field(msg.ls2Message, 'applicationID')) return false;
+  return rawSender(msg).value === serviceName;
 }
 
 /**

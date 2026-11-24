@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import * as fs from 'fs';
 import * as path from 'path';
 import { mkdirRecursive, stringEndsWith } from '../compat';
@@ -144,5 +145,25 @@ export class UploadStore {
 
   read(id: string): string {
     return fs.readFileSync(this.filePath(id), 'utf-8');
+  }
+
+  clear(): number {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(this.dataDir);
+    } catch {
+      return 0;
+    }
+    const seen: Record<string, boolean> = Object.create(null);
+    let removed = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const file = entries[i];
+      if (!/\.(?:m3u|json)$/i.test(file)) continue;
+      const id = file.replace(/\.(?:m3u|json)$/i, '');
+      if (!isValidUploadId(id) || seen[id]) continue;
+      seen[id] = true;
+      if (this.delete(id)) removed++;
+    }
+    return removed;
   }
 }

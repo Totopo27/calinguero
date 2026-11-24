@@ -1,6 +1,8 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { SidecarSubtitle } from '../types';
 import { fetchText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
+import { diagnosticStreamUrl } from '../utils/url';
 
 const log = createLogger('AssSubs');
 
@@ -67,7 +69,7 @@ export class AssSubtitles {
       if (!overlay) return;
       this.ass = new ASS(content, video, { container: overlay }) as unknown as AssInstance;
       if (this.delay) { try { this.ass.delay = this.delay; } catch { /* older assjs */ } }
-      log.info('showing ASS sidecar', sidecar.name || sidecar.lang || sidecar.url);
+      log.info('showing ASS sidecar', sidecar.name || sidecar.lang || diagnosticStreamUrl(sidecar.url));
     } catch (e) {
       log.warn('ASS load failed:', e);
     }

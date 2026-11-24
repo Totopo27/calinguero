@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { booleanValue, httpUrl, objectValue, stringValue, subtitleLanguage } from './validation';
 
 interface OpenSubtitlesCredentials {
@@ -156,5 +157,9 @@ export class SetupActionStore {
     if (index < 0) return false;
     this.actions.splice(index, 1);
     return true;
+  }
+
+  clear(): void {
+    this.actions.length = 0;
   }
 }

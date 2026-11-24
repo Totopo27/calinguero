@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import {
   booleanValue,
   httpUrl,
@@ -133,8 +134,8 @@ export function parseSetupState(value: unknown): SetupState {
   };
 }
 
-export class SetupStateStore {
-  private state: SetupState = {
+function emptySetupState(): SetupState {
+  return {
     playlists: [],
     xtreamAccounts: [],
     uploadedPlaylists: [],
@@ -149,6 +150,10 @@ export class SetupStateStore {
       opensubtitlesUsername: '',
     },
   };
+}
+
+export class SetupStateStore {
+  private state: SetupState = emptySetupState();
 
   set(state: SetupState): void {
     this.state = {
@@ -174,5 +179,9 @@ export class SetupStateStore {
       })),
       onlineSubtitles: { ...this.state.onlineSubtitles },
     };
+  }
+
+  clear(): void {
+    this.state = emptySetupState();
   }
 }

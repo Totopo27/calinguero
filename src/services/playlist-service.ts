@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import {
   UNCATEGORIZED_GROUP,
   type Channel,
@@ -51,6 +52,7 @@ import {
   type CacheRecordRef,
 } from './idb-cache';
 import { isSourceEnabled } from '../utils/playlist';
+import { diagnosticStreamUrl } from '../utils/url';
 import {
   filterLiveStreams,
   liveCategoryCounts,
@@ -514,6 +516,7 @@ class PlaylistServiceImpl {
     let completedProcessed = 0;
     let completedKept = 0;
     const addEpgSource = (url: string, playlistId: string, kind: EpgSource['kind']): void => {
+      if (!usableDirectSource(url)) return;
       const existing = epgSources.find((source) => source.url === url);
       if (existing) {
         if (!existing.playlistIds.includes(playlistId)) existing.playlistIds.push(playlistId);
@@ -618,7 +621,7 @@ class PlaylistServiceImpl {
           xtreamOutput,
         );
       }
-      const plDone = log.time(`fetch '${pl.name || pl.url}'`);
+      const plDone = log.time(`fetch '${pl.name || diagnosticStreamUrl(pl.url)}'`);
       // Channels the worker keeps to write the cache; any change here drops them.
       let workerChannels: Channel[] | null = null;
       let streamed = false;
@@ -747,7 +750,7 @@ class PlaylistServiceImpl {
             parsed.issues.slice(0, 5).map(issue => `${issue.code}@${issue.line}`).join(', '));
         }
         log.info('Parsed', parsed.channels.length, 'channels,', parsed.groups.length, 'groups',
-          parsed.epgUrl ? `| epg: ${parsed.epgUrl}` : '');
+          parsed.epgUrl ? `| epg: ${diagnosticStreamUrl(parsed.epgUrl)}` : '');
         // The worker already dropped this playlist's own copies.
         let added = 0, dupes = workerDuplicates ?? 0;
         // Merging de-duplicates by stream: the same location sent with other
@@ -798,7 +801,7 @@ class PlaylistServiceImpl {
               epg = epgParsed.toString();
               log.info('Rewrote loopback EPG host to', epgParsed.hostname);
             }
-          } catch (e) { log.warn('Could not parse EPG URL:', epg, e); }
+          } catch (e) { log.warn('Could not parse EPG URL:', diagnosticStreamUrl(epg), e); }
           addEpgSource(epg, plKey, 'm3u');
         }
         log.info(
@@ -832,13 +835,13 @@ class PlaylistServiceImpl {
         );
         if (pl.source === 'xtream') {
           log.error(
-            `Failed to load Xtream playlist '${pl.name || pl.url}'`,
+            `Failed to load Xtream playlist '${pl.name || diagnosticStreamUrl(pl.url)}'`,
             'event=xtream.playlist.load.failed',
             `load=${String(load)}`,
             err,
           );
         } else {
-          log.error(`Failed to load playlist '${pl.name || pl.url}':`, err);
+          log.error(`Failed to load playlist '${pl.name || diagnosticStreamUrl(pl.url)}':`, err);
         }
       }
       completedProcessed += sourceProcessed;

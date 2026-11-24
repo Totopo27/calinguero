@@ -1,15 +1,18 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * Tests for the shared LAN service HTTP routes. Each test gets its own
  * tempdir and a server bound to a random port.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import type * as http from 'http';
+import { PassThrough } from 'stream';
 import { startServer } from './server';
 
 let server: http.Server;
+let boundPort: number;
 let baseUrl: string;
 let setupUrl: string;
 let setupToken: string;
@@ -38,6 +41,7 @@ beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-svc-test-'));
   const result = await startServer(0, dataDir);
   server = result.server;
+  boundPort = result.port;
   baseUrl = `http://127.0.0.1:${result.port}`;
   const info = (await (await fetch(`${baseUrl}/info`)).json()) as {
     setupUrl: string;
@@ -48,6 +52,101 @@ beforeAll(async () => {
   setupToken = parsedSetupUrl.searchParams.get('token')!;
   pairingCode = info.pairingCode;
 });
+
+function rawHttpRequest(
+  port: number,
+  options: {
+    method?: string;
+    path: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        method: options.method || 'GET',
+        path: options.path,
+        headers: options.headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode || 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (options.body !== undefined) req.write(options.body);
+    req.end();
+  });
+}
+
+function simulateLanRequest(
+  targetServer: http.Server,
+  options: {
+    method?: string;
+    url: string;
+    host?: string;
+    origin?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    remoteAddress?: string;
+  },
+): Promise<{ status: number; headers: Record<string, string | number | string[]>; body: string }> {
+  return new Promise((resolve) => {
+    const reqStream = new PassThrough();
+    const req = Object.assign(reqStream, {
+      method: options.method || 'GET',
+      url: options.url,
+      headers: {
+        host: options.host ?? `127.0.0.1:${boundPort}`,
+        ...(options.origin !== undefined ? { origin: options.origin } : {}),
+        ...(options.headers || {}),
+      } as Record<string, string>,
+      socket: {
+        remoteAddress: options.remoteAddress ?? '192.0.2.10',
+      },
+    }) as unknown as http.IncomingMessage;
+
+    let statusCode = 0;
+    let headers: Record<string, string | number | string[]> = {};
+    const chunks: Buffer[] = [];
+    const res = {
+      writeHead(code: number, hdrs?: Record<string, string | number | string[]>) {
+        statusCode = code;
+        headers = {};
+        if (hdrs) {
+          for (const key of Object.keys(hdrs)) {
+            headers[key.toLowerCase()] = hdrs[key];
+          }
+        }
+        return res;
+      },
+      end(chunk?: string | Buffer) {
+        if (chunk !== undefined) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk);
+        }
+        resolve({
+          status: statusCode,
+          headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
+      },
+    } as unknown as http.ServerResponse;
+
+    targetServer.emit('request', req, res);
+    if (options.body !== undefined) reqStream.write(options.body);
+    reqStream.end();
+  });
+}
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -646,6 +745,253 @@ describe('startServer onChange callback (Luna push fan-out source)', () => {
       expect(onChange).toHaveBeenCalledTimes(1);
     } finally {
       await new Promise<void>((resolve) => s.close(() => resolve()));
+      fs.rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('LAN server security hardening', () => {
+  it('requires the setup token for non-loopback GET /uploads and restricts .m3u downloads to loopback', async () => {
+    await postUpload('secret.m3u', VALID_M3U);
+
+    const anonList = await simulateLanRequest(server, {
+      method: 'GET',
+      url: '/uploads',
+      remoteAddress: '192.0.2.10',
+    });
+    expect(anonList.status).toBe(403);
+
+    const tokenList = await simulateLanRequest(server, {
+      method: 'GET',
+      url: `/uploads?token=${encodeURIComponent(setupToken)}`,
+      remoteAddress: '192.0.2.10',
+    });
+    expect(tokenList.status).toBe(200);
+    expect(JSON.parse(tokenList.body)).toHaveLength(1);
+
+    const anonBody = await simulateLanRequest(server, {
+      method: 'GET',
+      url: '/uploads/secret.m3u',
+      remoteAddress: '192.0.2.10',
+    });
+    expect(anonBody.status).toBe(403);
+
+    const tokenBody = await simulateLanRequest(server, {
+      method: 'GET',
+      url: `/uploads/secret.m3u?token=${encodeURIComponent(setupToken)}`,
+      remoteAddress: '192.0.2.10',
+    });
+    expect(tokenBody.status).toBe(403);
+
+    const loopbackList = await fetch(`${baseUrl}/uploads`);
+    expect(loopbackList.status).toBe(200);
+    const loopbackBody = await fetch(`${baseUrl}/uploads/secret.m3u`);
+    expect(loopbackBody.status).toBe(200);
+  });
+
+  it('rejects DNS-rebinding or foreign Host headers', async () => {
+    const foreign = await rawHttpRequest(boundPort, {
+      path: '/setup',
+      headers: { Host: `evil.invalid:${boundPort}` },
+    });
+    expect(foreign.status).toBe(403);
+
+    const wrongPort = await rawHttpRequest(boundPort, {
+      path: '/info',
+      headers: { Host: `127.0.0.1:${boundPort + 1}` },
+    });
+    expect(wrongPort.status).toBe(403);
+
+    const noHost = await simulateLanRequest(server, {
+      url: '/setup',
+      host: '',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(noHost.status).toBe(403);
+  });
+
+  it('drops wildcard CORS and rejects untrusted cross-origin callers', async () => {
+    const loopbackNoOrigin = await rawHttpRequest(boundPort, { path: '/info' });
+    expect(loopbackNoOrigin.status).toBe(200);
+    expect(loopbackNoOrigin.headers['access-control-allow-origin']).toBeUndefined();
+
+    const evilLoopback = await rawHttpRequest(boundPort, {
+      path: '/info',
+      headers: { Origin: 'https://evil.invalid' },
+    });
+    expect(evilLoopback.status).toBe(403);
+
+    const evilLan = await simulateLanRequest(server, {
+      method: 'GET',
+      url: `/uploads?token=${encodeURIComponent(setupToken)}`,
+      origin: 'https://evil.invalid',
+      remoteAddress: '192.0.2.10',
+    });
+    expect(evilLan.status).toBe(403);
+
+    const previewOrigin = await rawHttpRequest(boundPort, {
+      path: '/info',
+      headers: { Origin: 'http://localhost:3000' },
+    });
+    expect(previewOrigin.status).toBe(200);
+    expect(previewOrigin.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(previewOrigin.headers.vary).toBe('Origin');
+
+    const fileOrigin = await rawHttpRequest(boundPort, {
+      path: '/info',
+      headers: { Origin: 'file://' },
+    });
+    expect(fileOrigin.status).toBe(200);
+    expect(fileOrigin.headers['access-control-allow-origin']).toBe('file://');
+
+    const nullOriginTv = await rawHttpRequest(boundPort, {
+      path: '/info',
+      headers: { Origin: 'null' },
+    });
+    expect(nullOriginTv.status).toBe(200);
+    expect(nullOriginTv.headers['access-control-allow-origin']).toBe('null');
+
+    const preflight = await rawHttpRequest(boundPort, {
+      method: 'OPTIONS',
+      path: '/setup-state',
+      headers: {
+        Origin: 'http://localhost:3000',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'Content-Type',
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+  });
+
+  it('rejects null Origin when allowNullOrigin is disabled (standalone mode)', async () => {
+    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-svc-standalone-'));
+    const { server: standaloneServer, port } = await startServer(
+      0,
+      localDir,
+      undefined,
+      undefined,
+      undefined,
+      { allowNullOrigin: false },
+    );
+    try {
+      const denied = await rawHttpRequest(port, {
+        path: '/info',
+        headers: { Origin: 'null' },
+      });
+      expect(denied.status).toBe(403);
+
+      const allowed = await rawHttpRequest(port, {
+        path: '/info',
+        headers: { Origin: 'http://localhost:3000' },
+      });
+      expect(allowed.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve) => standaloneServer.close(() => resolve()));
+      fs.rmSync(localDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires application/json Content-Type on JSON mutation endpoints', async () => {
+    const pairRes = await rawHttpRequest(boundPort, {
+      method: 'POST',
+      path: '/pair',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ code: pairingCode }),
+    });
+    expect(pairRes.status).toBe(415);
+
+    const stateRes = await rawHttpRequest(boundPort, {
+      method: 'PUT',
+      path: '/setup-state',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '{}',
+    });
+    expect(stateRes.status).toBe(415);
+
+    const actionRes = await rawHttpRequest(boundPort, {
+      method: 'POST',
+      path: `/setup-actions?token=${encodeURIComponent(setupToken)}`,
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ type: 'remove-source', sourceId: 'x1' }),
+    });
+    expect(actionRes.status).toBe(415);
+  });
+
+  it('clears uploads, queued setup actions, and setup state on loopback POST /reset', async () => {
+    const onChange = vi.fn();
+    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-svc-reset-'));
+    const { server: resetServer, port } = await startServer(0, localDir, onChange);
+    try {
+      const info = (await (await fetch(`http://127.0.0.1:${port}/info`)).json()) as {
+        setupUrl: string;
+      };
+      const token = new URL(info.setupUrl).searchParams.get('token')!;
+
+      expect((await fetch(`http://127.0.0.1:${port}/uploads?name=keep.m3u&token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: VALID_M3U,
+      })).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/setup-state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playlists: [{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }],
+          xtreamAccounts: [],
+          uploadedPlaylists: [{ id: 'u1', uploadId: 'keep' }],
+          manualEpgSources: [],
+          onlineSubtitles: {
+            preferredLanguage: '',
+            subdlConfigured: false,
+            assrtConfigured: false,
+            opensubtitlesConfigured: false,
+            opensubtitlesApiKeyConfigured: false,
+            opensubtitlesPasswordConfigured: false,
+            opensubtitlesUsername: '',
+          },
+        }),
+      })).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/setup-actions?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'remove-source', sourceId: 'p1' }),
+      })).status).toBe(201);
+      onChange.mockClear();
+
+      const lanDenied = await simulateLanRequest(resetServer, {
+        method: 'POST',
+        url: `/reset?token=${encodeURIComponent(token)}`,
+        host: `127.0.0.1:${port}`,
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        remoteAddress: '192.0.2.10',
+      });
+      expect(lanDenied.status).toBe(403);
+      expect(fs.existsSync(path.join(localDir, 'keep.m3u'))).toBe(true);
+
+      const wrongType = await rawHttpRequest(port, {
+        method: 'POST',
+        path: '/reset',
+        headers: { 'Content-Type': 'text/plain' },
+        body: '{}',
+      });
+      expect(wrongType.status).toBe(415);
+
+      const resetRes = await fetch(`http://127.0.0.1:${port}/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(resetRes.status).toBe(200);
+      expect(await resetRes.json()).toEqual({ reset: true, removed: 1 });
+      expect(onChange).toHaveBeenCalledWith('uploads-changed');
+      expect(fs.readdirSync(localDir)).toEqual([]);
+      expect(await (await fetch(`http://127.0.0.1:${port}/setup-actions`)).json()).toEqual([]);
+      expect(await (await fetch(`http://127.0.0.1:${port}/setup-state?token=${token}`)).json())
+        .toMatchObject({ playlists: [], uploadedPlaylists: [] });
+    } finally {
+      await new Promise<void>((resolve) => resetServer.close(() => resolve()));
       fs.rmSync(localDir, { recursive: true, force: true });
     }
   });

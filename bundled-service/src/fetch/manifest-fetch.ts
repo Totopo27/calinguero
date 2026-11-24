@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * One bounded GET of a stream manifest with the channel's HTTP headers, for
  * the app's Luna playback path: the page cannot send Referer or User-Agent,
@@ -6,10 +7,24 @@
  */
 
 import * as http from 'http';
+import * as net from 'net';
 import * as nodeUrl from 'url';
 import * as zlib from 'zlib';
 import { lunaFailure } from '../luna-reply';
-import { httpUrl, isRedirect, nextHop, requestHeaders, transport, upstreamOptions } from '../upstream';
+import {
+  httpUrl,
+  isLoopbackAddress,
+  isRedirect,
+  nextHop,
+  requestHeaders,
+  transport,
+  upstreamOptions,
+} from '../upstream';
+
+export interface ManifestFetchOptions {
+  /** Tests and standalone smoke only: allow loopback upstreams. */
+  allowLoopback?: boolean;
+}
 
 export const MANIFEST_FETCH_HARD_MAX_BYTES = 1024 * 1024;
 export const MANIFEST_FETCH_DEFAULT_TIMEOUT_MS = 5000;
@@ -97,12 +112,17 @@ function reportedHref(url: nodeUrl.Url): string {
  * MAX_REDIRECTS times, and the timeout covers the whole chain.
  * `done` runs exactly once.
  */
-export function fetchManifest(input: ManifestFetchRequest, done: (result: ManifestFetchResult) => void): void {
+export function fetchManifest(
+  input: ManifestFetchRequest,
+  done: (result: ManifestFetchResult) => void,
+  options: ManifestFetchOptions = {},
+): void {
   const first = httpUrl(input.url);
   if (!first) {
     done(manifestFetchFailure('bad_url', 'Only http and https URLs are allowed'));
     return;
   }
+  const allowLoopback = !!options.allowLoopback;
   const maxBytes = boundedInteger(input.maxBytes, MANIFEST_FETCH_HARD_MAX_BYTES, MANIFEST_FETCH_HARD_MAX_BYTES);
   const timeoutMs = boundedInteger(input.timeoutMs, MANIFEST_FETCH_DEFAULT_TIMEOUT_MS,
     MANIFEST_FETCH_MAX_TIMEOUT_MS);
@@ -124,10 +144,14 @@ export function fetchManifest(input: ManifestFetchRequest, done: (result: Manife
   }, timeoutMs);
 
   const hop = (url: nodeUrl.Url, redirects: number, carried: Record<string, string>, auth: string): void => {
-    const options = upstreamOptions(url, 'GET', requestHeaders(url.protocol || '', carried), auth, false);
+    if (!allowLoopback && isLoopbackAddress(url.hostname || '')) {
+      finish(manifestFetchFailure('blocked', 'Loopback upstream is not allowed'));
+      return;
+    }
+    const requestOptions = upstreamOptions(url, 'GET', requestHeaders(url.protocol || '', carried), auth, false);
     let req: http.ClientRequest;
     try {
-      req = transport(url).request(options);
+      req = transport(url).request(requestOptions);
     } catch (e) {
       finish(manifestFetchFailure('bad_url', e instanceof Error ? e.message : String(e)));
       return;
@@ -136,6 +160,17 @@ export function fetchManifest(input: ManifestFetchRequest, done: (result: Manife
     req.on('error', (e: Error) => {
       if (active === req) finish(manifestFetchFailure('network', e.message));
     });
+    if (!allowLoopback) {
+      req.on('socket', (socket: net.Socket) => {
+        const state = socket as unknown as { connecting?: boolean; _connecting?: boolean };
+        if (!state.connecting && !state._connecting) return;
+        socket.once('lookup', (error: Error | null, address: string) => {
+          if (error || active !== req || !isLoopbackAddress(address)) return;
+          finish(manifestFetchFailure('blocked', 'Loopback upstream is not allowed'));
+          socket.destroy();
+        });
+      });
+    }
     req.on('response', (res: http.IncomingMessage) => {
       if (finished || active !== req) {
         res.resume();

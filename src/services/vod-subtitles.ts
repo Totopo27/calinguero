@@ -1,7 +1,9 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { SidecarSubtitle } from '../types';
 import { parseSubtitleFile } from '../utils/srt';
 import { fetchText } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
+import { diagnosticStreamUrl } from '../utils/url';
 import { t } from '../i18n';
 import { WebVttCueTrack } from './webvtt-cue-track';
 import type { VttCue } from '../utils/webvtt';
@@ -61,7 +63,7 @@ export class VodSubtitles {
       for (const cue of cues) {
         this.cueTrack.add(cue.start, cue.end, cue.text, cue.settings);
       }
-      log.info('loaded', cues.length, 'cues from', entry.url);
+      log.info('loaded', cues.length, 'cues from', entry.url ? diagnosticStreamUrl(entry.url) : 'inline');
     } catch (e) {
       if (gen === this.gen) {
         this._activeIndex = -1;

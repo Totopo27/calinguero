@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * Shared LAN HTTP server for phone setup and M3U uploads. The Luna registration
  * entry point lives in index.ts; lan/service.ts passes the resolved data
@@ -29,8 +30,13 @@ const uploadLog = createLogger('upload');
 
 export type ServiceChangeEvent = 'uploads-changed' | 'setup-changed';
 
+export interface LanServerOptions {
+  allowNullOrigin?: boolean;
+}
+
 const PAIRING_MAX_FAILURES = 5;
 const PAIRING_LOCK_MS = 60 * 1000;
+const LOCAL_CONTROL_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i;
 
 function getLanIp(): string {
   const ifaces = os.networkInterfaces();
@@ -42,18 +48,118 @@ function getLanIp(): string {
   return 'localhost';
 }
 
-function send(res: http.ServerResponse, status: number, contentType: string, body: string | Buffer): void {
+function isLocalInterfaceAddress(hostname: string): boolean {
+  if (hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1') return true;
+  const ifaces = os.networkInterfaces();
+  const names = Object.keys(ifaces);
+  for (let i = 0; i < names.length; i++) {
+    const list = ifaces[names[i]] || [];
+    for (let j = 0; j < list.length; j++) {
+      const addr = String(list[j].address || '').toLowerCase().replace(/%.*$/, '');
+      if (addr && addr === hostname) return true;
+    }
+  }
+  return false;
+}
+
+function validateHostHeader(
+  rawHost: unknown,
+  boundPort: number,
+): { allowed: boolean; normalizedHost: string } {
+  if (typeof rawHost !== 'string' || !rawHost || /[\0-\x20\x7f]/.test(rawHost)) {
+    return { allowed: false, normalizedHost: '' };
+  }
+  let hostname = '';
+  let portPart: string | null = null;
+  if (rawHost.charAt(0) === '[') {
+    const close = rawHost.indexOf(']');
+    if (close <= 1) return { allowed: false, normalizedHost: '' };
+    hostname = rawHost.slice(1, close).toLowerCase();
+    const rest = rawHost.slice(close + 1);
+    if (rest) {
+      if (rest.charAt(0) !== ':' || rest.length < 2) {
+        return { allowed: false, normalizedHost: '' };
+      }
+      portPart = rest.slice(1);
+    }
+  } else {
+    const colon = rawHost.indexOf(':');
+    if (colon >= 0) {
+      if (rawHost.indexOf(':', colon + 1) >= 0 || colon === 0 || colon === rawHost.length - 1) {
+        return { allowed: false, normalizedHost: '' };
+      }
+      hostname = rawHost.slice(0, colon).toLowerCase();
+      portPart = rawHost.slice(colon + 1);
+    } else {
+      hostname = rawHost.toLowerCase();
+    }
+  }
+  if (portPart !== null) {
+    if (!/^\d+$/.test(portPart) || Number(portPart) !== boundPort) {
+      return { allowed: false, normalizedHost: '' };
+    }
+  } else if (boundPort !== 80) {
+    return { allowed: false, normalizedHost: '' };
+  }
+  if (!isLocalInterfaceAddress(hostname)) {
+    return { allowed: false, normalizedHost: '' };
+  }
+  return { allowed: true, normalizedHost: rawHost.toLowerCase() };
+}
+
+function resolveCorsOrigin(
+  req: http.IncomingMessage,
+  normalizedHost: string,
+  allowNullOrigin: boolean,
+): { allowed: boolean; allowOrigin: string } {
+  const originHeader = req.headers.origin;
+  if (originHeader === undefined || originHeader === '') {
+    return { allowed: true, allowOrigin: '' };
+  }
+  if (typeof originHeader !== 'string') {
+    return { allowed: false, allowOrigin: '' };
+  }
+  if (originHeader.toLowerCase() === 'http://' + normalizedHost) {
+    return { allowed: true, allowOrigin: '' };
+  }
+  if (isLoopback(req)) {
+    if (LOCAL_CONTROL_ORIGIN.test(originHeader)) {
+      return { allowed: true, allowOrigin: originHeader };
+    }
+    if (originHeader === 'file://' || (allowNullOrigin && originHeader === 'null')) {
+      return { allowed: true, allowOrigin: originHeader };
+    }
+  }
+  return { allowed: false, allowOrigin: '' };
+}
+
+function isJsonContentType(req: http.IncomingMessage): boolean {
+  const raw = req.headers['content-type'];
+  return typeof raw === 'string' && /^application\/json(?:\s*;|$)/i.test(raw.trim());
+}
+
+function send(
+  res: http.ServerResponse,
+  status: number,
+  contentType: string,
+  body: string | Buffer,
+  allowOrigin = '',
+): void {
   const buf = typeof body === 'string' ? bufferFrom(body, 'utf-8') : body;
-  res.writeHead(status, {
+  const headers: http.OutgoingHttpHeaders = {
     'Content-Type': contentType,
     'Content-Length': buf.length,
-    'Access-Control-Allow-Origin': '*',
-  });
+  };
+  if (allowOrigin) {
+    headers['Access-Control-Allow-Origin'] = allowOrigin;
+    headers['Vary'] = 'Origin';
+  }
+  res.writeHead(status, headers);
   res.end(buf);
 }
 
-function sendJson(res: http.ServerResponse, status: number, data: unknown): void {
-  send(res, status, 'application/json; charset=utf-8', JSON.stringify(data));
+function sendJson(res: http.ServerResponse, status: number, data: unknown, allowOrigin = ''): void {
+  send(res, status, 'application/json; charset=utf-8', JSON.stringify(data), allowOrigin);
 }
 
 function isLoopback(req: http.IncomingMessage): boolean {
@@ -108,8 +214,10 @@ export function startServer(
   onChange?: (event: ServiceChangeEvent) => void,
   setupActions = new SetupActionStore(),
   setupState = new SetupStateStore(),
+  options: LanServerOptions = {},
 ): Promise<{ server: http.Server; port: number }> {
   let boundPort = port;
+  const allowNullOrigin = options.allowNullOrigin !== false;
   const setupToken = randomBytes(6).toString('hex');
   const pairingCode = padStart(String(secureRandomInt(10000)), 4, '0');
   const pairingAttempts = Object.create(null) as {
@@ -118,7 +226,42 @@ export function startServer(
   const uploads = new UploadStore(dataDir);
 
   async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const urlObj = parseUrl(req.url || '/', 'http://' + (req.headers.host || 'localhost'));
+    const hostCheck = validateHostHeader(req.headers.host, boundPort);
+    if (!hostCheck.allowed) {
+      sendJson(res, 403, { error: 'Forbidden host' });
+      return;
+    }
+    const cors = resolveCorsOrigin(req, hostCheck.normalizedHost, allowNullOrigin);
+    if (!cors.allowed) {
+      sendJson(res, 403, { error: 'Forbidden origin' });
+      return;
+    }
+    const reply = (status: number, contentType: string, body: string | Buffer): void => {
+      send(res, status, contentType, body, cors.allowOrigin);
+    };
+    const replyJson = (status: number, data: unknown): void => {
+      sendJson(res, status, data, cors.allowOrigin);
+    };
+    if (req.method === 'OPTIONS') {
+      const preflight: http.OutgoingHttpHeaders = {
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '600',
+        'Content-Length': '0',
+      };
+      if (cors.allowOrigin) {
+        preflight['Access-Control-Allow-Origin'] = cors.allowOrigin;
+        preflight['Vary'] = 'Origin';
+      }
+      if (req.headers['access-control-request-private-network']) {
+        preflight['Access-Control-Allow-Private-Network'] = 'true';
+      }
+      res.writeHead(204, preflight);
+      res.end();
+      return;
+    }
+
+    const urlObj = parseUrl(req.url || '/', 'http://' + hostCheck.normalizedHost);
     const pathname = urlObj.pathname;
     const query = urlObj.query;
     const host = req.headers.host || ('localhost:' + boundPort);
@@ -126,27 +269,31 @@ export function startServer(
     try {
       if (pathname === '/info') {
         if (!isLoopback(req)) {
-          sendJson(res, 403, { error: 'Local access only' });
+          replyJson(403, { error: 'Local access only' });
           return;
         }
         const ip = getLanIp();
-        const hostPort = host.indexOf(':') >= 0 ? host.split(':')[1] : String(boundPort);
-        sendJson(res, 200, {
+        const portText = String(boundPort);
+        replyJson(200, {
           ip,
-          port: parseInt(hostPort, 10) || boundPort,
-          setupUrl: 'http://' + ip + ':' + hostPort + '/setup?token=' + setupToken,
-          manualUrl: 'http://' + ip + ':' + hostPort,
+          port: boundPort,
+          setupUrl: 'http://' + ip + ':' + portText + '/setup?token=' + setupToken,
+          manualUrl: 'http://' + ip + ':' + portText,
           pairingCode,
           dataDir,
         });
       } else if ((pathname === '/' || pathname === '/setup') && req.method === 'GET') {
-        send(res, 200, 'text/html; charset=utf-8', setupPageHtml());
+        reply(200, 'text/html; charset=utf-8', setupPageHtml());
       } else if (pathname === '/pair' && req.method === 'POST') {
+        if (!isJsonContentType(req)) {
+          replyJson(415, { error: 'Content-Type must be application/json' });
+          return;
+        }
         const client = req.socket.remoteAddress || 'unknown';
         const now = Date.now();
         let current = pairingAttempts[client];
         if (current && current.blockedUntil > now) {
-          sendJson(res, 429, {
+          replyJson(429, {
             error: 'Too many pairing attempts',
             retryAfter: Math.ceil((current.blockedUntil - now) / 1000),
           });
@@ -161,41 +308,49 @@ export function startServer(
           const body = JSON.parse(await readBody(req, 1024)) as { code?: unknown };
           submitted = typeof body.code === 'string' ? body.code : '';
         } catch {
-          sendJson(res, 400, { error: 'Invalid pairing request' });
+          replyJson(400, { error: 'Invalid pairing request' });
           return;
         }
         if (submitted !== pairingCode) {
           const failures = (current?.failures || 0) + 1;
           const blockedUntil = failures >= PAIRING_MAX_FAILURES ? now + PAIRING_LOCK_MS : 0;
           pairingAttempts[client] = { failures, blockedUntil };
-          sendJson(res, blockedUntil ? 429 : 401, {
+          replyJson(blockedUntil ? 429 : 401, {
             error: blockedUntil ? 'Too many pairing attempts' : 'Invalid pairing code',
             retryAfter: blockedUntil ? Math.ceil(PAIRING_LOCK_MS / 1000) : undefined,
           });
           return;
         }
         delete pairingAttempts[client];
-        sendJson(res, 200, { token: setupToken });
+        replyJson(200, { token: setupToken });
       } else if (pathname === '/setup-state' && req.method === 'PUT') {
         if (!isLoopback(req)) {
-          sendJson(res, 403, { error: 'Local access only' });
+          replyJson(403, { error: 'Local access only' });
+          return;
+        }
+        if (!isJsonContentType(req)) {
+          replyJson(415, { error: 'Content-Type must be application/json' });
           return;
         }
         try {
           setupState.set(parseSetupState(JSON.parse(await readBody(req, 64 * 1024))));
-          sendJson(res, 200, { updated: true });
+          replyJson(200, { updated: true });
         } catch (e) {
-          sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          replyJson(400, { error: e instanceof Error ? e.message : String(e) });
         }
       } else if (pathname === '/setup-state' && req.method === 'GET') {
         if (query('token') !== setupToken) {
-          sendJson(res, 403, { error: 'Invalid setup token' });
+          replyJson(403, { error: 'Invalid setup token' });
           return;
         }
-        sendJson(res, 200, setupState.get());
+        replyJson(200, setupState.get());
       } else if (pathname === '/setup-actions' && req.method === 'POST') {
         if (query('token') !== setupToken) {
-          sendJson(res, 403, { error: 'Invalid setup token' });
+          replyJson(403, { error: 'Invalid setup token' });
+          return;
+        }
+        if (!isJsonContentType(req)) {
+          replyJson(415, { error: 'Content-Type must be application/json' });
           return;
         }
         try {
@@ -203,36 +358,36 @@ export function startServer(
           try { onChange?.('setup-changed'); } catch (cbErr) {
             log.error('onChange callback threw:', cbErr);
           }
-          sendJson(res, 201, { id: action.id, type: action.type });
+          replyJson(201, { id: action.id, type: action.type });
         } catch (e) {
-          sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          replyJson(400, { error: e instanceof Error ? e.message : String(e) });
         }
       } else if (pathname === '/setup-actions' && req.method === 'GET') {
         if (!isLoopback(req)) {
-          sendJson(res, 403, { error: 'Local access only' });
+          replyJson(403, { error: 'Local access only' });
           return;
         }
-        sendJson(res, 200, setupActions.list());
+        replyJson(200, setupActions.list());
       } else if (pathname.indexOf('/setup-actions/') === 0 && req.method === 'GET') {
         if (query('token') !== setupToken) {
-          sendJson(res, 403, { error: 'Invalid setup token' });
+          replyJson(403, { error: 'Invalid setup token' });
           return;
         }
         const id = Number(pathname.slice('/setup-actions/'.length));
         const pending = isSafeInteger(id) &&
           setupActions.list().some(action => action.id === id);
-        sendJson(res, 200, { id, pending });
+        replyJson(200, { id, pending });
       } else if (pathname.indexOf('/setup-actions/') === 0 && req.method === 'DELETE') {
         if (!isLoopback(req)) {
-          sendJson(res, 403, { error: 'Local access only' });
+          replyJson(403, { error: 'Local access only' });
           return;
         }
         const id = Number(pathname.slice('/setup-actions/'.length));
         const deleted = isSafeInteger(id) && setupActions.remove(id);
-        sendJson(res, deleted ? 200 : 404, { deleted, id });
+        replyJson(deleted ? 200 : 404, { deleted, id });
       } else if (pathname === '/uploads' && req.method === 'POST') {
         if (query('token') !== setupToken) {
-          sendJson(res, 403, { error: 'Invalid setup token' });
+          replyJson(403, { error: 'Invalid setup token' });
           return;
         }
         try {
@@ -240,52 +395,84 @@ export function startServer(
           const meta = uploads.save(query('name') || 'playlist.m3u', content);
           uploadLog.info('saved ' + meta.count + ' channels as ' + meta.id + '.m3u');
           try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); }
-          sendJson(res, 200, meta);
+          replyJson(200, meta);
         } catch (e) {
-          sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          replyJson(400, { error: e instanceof Error ? e.message : String(e) });
         }
-      } else if (pathname === '/uploads') {
+      } else if (pathname === '/uploads' && req.method === 'GET') {
+        if (!isLoopback(req) && query('token') !== setupToken) {
+          replyJson(403, { error: 'Invalid setup token' });
+          return;
+        }
         const base = 'http://' + host;
         const items = uploads.list().map((m) => ({
           ...m,
           url: base + '/uploads/' + encodeURIComponent(m.id) + '.m3u',
         }));
-        sendJson(res, 200, items);
+        replyJson(200, items);
+      } else if (pathname === '/uploads') {
+        replyJson(405, { error: 'Method not allowed' });
       } else if (pathname.indexOf('/uploads/') === 0) {
+        if (req.method === 'DELETE') {
+          if (!isLoopback(req) && query('token') !== setupToken) {
+            replyJson(403, { error: 'Invalid setup token' });
+            return;
+          }
+        } else if (req.method === 'GET') {
+          if (!isLoopback(req)) {
+            replyJson(403, { error: 'Local access only' });
+            return;
+          }
+        } else {
+          replyJson(405, { error: 'Method not allowed' });
+          return;
+        }
         let id: string;
         try {
           id = decodeURIComponent(pathname.slice('/uploads/'.length)).replace(/\.m3u$/i, '');
         } catch {
-          sendJson(res, 400, { error: 'Invalid upload id' });
+          replyJson(400, { error: 'Invalid upload id' });
           return;
         }
         if (!isValidUploadId(id)) {
-          sendJson(res, 400, { error: 'Invalid upload id' });
+          replyJson(400, { error: 'Invalid upload id' });
           return;
         }
         if (req.method === 'DELETE') {
-          if (!isLoopback(req) && query('token') !== setupToken) {
-            sendJson(res, 403, { error: 'Invalid setup token' });
-            return;
-          }
           const ok = uploads.delete(id);
           if (ok) { try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); } }
-          sendJson(res, ok ? 200 : 404, { deleted: ok, id });
+          replyJson(ok ? 200 : 404, { deleted: ok, id });
         } else {
           try {
-            send(res, 200, 'audio/mpegurl; charset=utf-8', uploads.read(id));
+            reply(200, 'audio/mpegurl; charset=utf-8', uploads.read(id));
           } catch {
-            send(res, 404, 'text/plain; charset=utf-8', 'Upload not found: ' + id);
+            reply(404, 'text/plain; charset=utf-8', 'Upload not found: ' + id);
           }
         }
+      } else if (pathname === '/reset' && req.method === 'POST') {
+        if (!isLoopback(req)) {
+          replyJson(403, { error: 'Local access only' });
+          return;
+        }
+        if (!isJsonContentType(req)) {
+          replyJson(415, { error: 'Content-Type must be application/json' });
+          return;
+        }
+        const removed = uploads.clear();
+        setupActions.clear();
+        setupState.clear();
+        if (removed > 0) {
+          try { onChange?.('uploads-changed'); } catch (cbErr) { log.error('onChange callback threw:', cbErr); }
+        }
+        replyJson(200, { reset: true, removed });
       } else {
-        send(res, 404, 'text/plain; charset=utf-8',
+        reply(404, 'text/plain; charset=utf-8',
           'Not found. Use /setup, /setup-actions, /uploads, or /info');
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.indexOf('EPIPE') >= 0 || msg.indexOf('ECONNRESET') >= 0) return;
-      try { send(res, 500, 'text/plain; charset=utf-8', 'Internal error: ' + msg); } catch { /* ignore */ }
+      try { reply(500, 'text/plain; charset=utf-8', 'Internal error: ' + msg); } catch { /* ignore */ }
     }
   }
 

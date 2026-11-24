@@ -1,3 +1,4 @@
+# NOTICE: Modified for the Calinguero project in 2026.
 node_modules/
 dist/
 *.ipk
@@ -6,6 +7,7 @@ dist/
 
 # Test artifacts
 test-output/
+diagnostics-*.json
 
 # Built JS service for the IPK
 build/

@@ -1,11 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+// NOTICE: Modified for the Calinguero project in 2026.
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { EventEmitter } from 'events';
 import * as http from 'http';
+import { createRequire, syncBuiltinESMExports } from 'module';
 import type { AddressInfo } from 'net';
 import * as zlib from 'zlib';
 import {
   MANIFEST_FETCH_HARD_MAX_BYTES,
   fetchManifest,
   sanitizeHeaders,
+  type ManifestFetchOptions,
   type ManifestFetchRequest,
   type ManifestFetchResult,
 } from './manifest-fetch';
@@ -31,8 +35,11 @@ function listen(handler: http.RequestListener): Promise<http.Server> {
   });
 }
 
-function fetchResult(request: ManifestFetchRequest): Promise<ManifestFetchResult> {
-  return new Promise(resolve => fetchManifest(request, resolve));
+function fetchResult(
+  request: ManifestFetchRequest,
+  options: ManifestFetchOptions = { allowLoopback: true },
+): Promise<ManifestFetchResult> {
+  return new Promise(resolve => fetchManifest(request, resolve, options));
 }
 
 beforeAll(async () => {
@@ -171,10 +178,17 @@ describe('fetchManifest', () => {
     expect(lastSeen().headers.referer).toBe('http://host/r');
   });
 
-  it('keeps credentials on their origin across a redirect', async () => {
+  it('keeps credentials and custom auth headers on their origin across a redirect', async () => {
     const result = await fetchResult({
       url: `${base}/cross`,
-      headers: { Referer: 'http://host/r', 'User-Agent': 'Agent 1', Cookie: 'c=1', Authorization: 'Basic a' },
+      headers: {
+        Referer: 'http://host/r',
+        'User-Agent': 'Agent 1',
+        Cookie: 'c=1',
+        Authorization: 'Basic a',
+        'X-Token': 'v1',
+        'X-Api-Key': 'k1',
+      },
     });
     expect(result).toMatchObject({ returnValue: true, url: `${otherBase}/x/a.m3u8` });
     const headers = lastSeen().headers;
@@ -182,6 +196,8 @@ describe('fetchManifest', () => {
     expect(headers['user-agent']).toBe('Agent 1');
     expect(headers.cookie).toBeUndefined();
     expect(headers.authorization).toBeUndefined();
+    expect(headers['x-token']).toBeUndefined();
+    expect(headers['x-api-key']).toBeUndefined();
   });
 
   it('sends URL credentials as Basic auth on its origin only and never reports them', async () => {
@@ -251,7 +267,7 @@ describe('fetchManifest', () => {
       fetchManifest({ url: `${base}/hang.m3u8`, timeoutMs: 100 }, (result) => {
         done(result);
         setTimeout(resolve, 100);
-      });
+      }, { allowLoopback: true });
     });
     expect(done).toHaveBeenCalledTimes(1);
     expect(done.mock.calls[0][0]).toMatchObject({ returnValue: false, errorCode: 'timeout' });
@@ -264,14 +280,71 @@ describe('fetchManifest', () => {
     expect(await fetchResult({ url: `http://127.0.0.1:${port}/a.m3u8` }))
       .toMatchObject({ returnValue: false, errorCode: 'network' });
   });
+
+  it('refuses loopback and unspecified addresses by default', async () => {
+    for (const url of [
+      'http://127.0.0.1:1/a.m3u8',
+      'http://[::1]/a.m3u8',
+      'http://0.0.0.0/a.m3u8',
+      'http://[::0:ffff:127.0.0.1]:1/a.m3u8',
+      'http://[0:0:0:0:0:ffff:127.0.0.1]:1/a.m3u8',
+      'http://[::127.0.0.1]:1/a.m3u8',
+    ]) {
+      expect(await fetchResult({ url }, {}), url)
+        .toMatchObject({ returnValue: false, errorCode: 'blocked' });
+    }
+    expect(await fetchResult({ url: 'http://[::1%25lo0]/a.m3u8' }, {}))
+      .toMatchObject({ returnValue: false, errorCode: 'bad_url' });
+  });
+
+  it('refuses a hostname resolving to loopback before connecting', async () => {
+    const before = seen.length;
+    const result = await fetchResult({ url: `${base.replace('127.0.0.1', 'localhost')}/a.m3u8` }, {});
+    expect(result).toMatchObject({ returnValue: false, errorCode: 'blocked' });
+    expect(seen.length).toBe(before);
+  });
+
+  it('refuses a redirect from a remote origin to a loopback address', async () => {
+    const httpModule = createRequire(import.meta.url)('http') as typeof http;
+    const original = httpModule.request;
+    let requestCalls = 0;
+    onTestFinished(() => {
+      httpModule.request = original;
+      syncBuiltinESMExports();
+    });
+    httpModule.request = ((_opts: http.RequestOptions) => {
+      requestCalls++;
+      const req = new EventEmitter() as http.ClientRequest;
+      req.abort = vi.fn() as unknown as http.ClientRequest['abort'];
+      req.end = (() => {
+        const res = new EventEmitter() as http.IncomingMessage;
+        res.statusCode = 302;
+        res.headers = { location: `${base}/a.m3u8` };
+        res.resume = vi.fn() as unknown as http.IncomingMessage['resume'];
+        queueMicrotask(() => {
+          req.emit('response', res);
+        });
+        return req;
+      }) as unknown as http.ClientRequest['end'];
+      return req;
+    }) as typeof http.request;
+    syncBuiltinESMExports();
+
+    const result = await fetchResult({ url: 'http://remote.invalid/start.m3u8' }, {});
+    expect(result).toMatchObject({ returnValue: false, errorCode: 'blocked' });
+    expect(requestCalls).toBe(1);
+  });
 });
 
 describe('fetchManifest Luna method', () => {
   const APP = 'com.example.app';
 
-  function call(msg: Partial<LunaMsg>): Promise<Record<string, unknown>> {
+  function call(
+    msg: Partial<LunaMsg>,
+    options: ManifestFetchOptions = { allowLoopback: true },
+  ): Promise<Record<string, unknown>> {
     let handler: ((msg: LunaMsg) => void) | null = null;
-    registerManifestFetchService({ register: (_name, h) => { handler = h; } }, APP);
+    registerManifestFetchService({ register: (_name, h) => { handler = h; } }, APP, options);
     return new Promise((resolve) => {
       handler!({ ...msg, respond: r => resolve(r as Record<string, unknown>) } as LunaMsg);
     });
@@ -280,6 +353,19 @@ describe('fetchManifest Luna method', () => {
   it('answers the app', async () => {
     expect(await call({ sender: APP, payload: { url: `${base}/a.m3u8` } }))
       .toMatchObject({ returnValue: true, text: PLAYLIST });
+  });
+
+  it('blocks loopback upstreams when registered with default options', async () => {
+    let handler: ((msg: LunaMsg) => void) | null = null;
+    registerManifestFetchService({ register: (_name, h) => { handler = h; } }, APP);
+    const result = await new Promise<Record<string, unknown>>((resolve) => {
+      handler!({
+        sender: APP,
+        payload: { url: `${base}/a.m3u8` },
+        respond: r => resolve(r as Record<string, unknown>),
+      } as LunaMsg);
+    });
+    expect(result).toMatchObject({ returnValue: false, errorCode: 'blocked' });
   });
 
   it('denies every other caller without fetching', async () => {

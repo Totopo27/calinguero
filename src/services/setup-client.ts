@@ -1,3 +1,5 @@
+// NOTICE: Modified for the Calinguero project in 2026.
+import { CONFIG } from '../config';
 import type { ManualEpgSource, PlaylistEntry } from '../types';
 import { fetchWithTimeout } from '../utils/fetch-helper';
 import { createLogger } from '../utils/logger';
@@ -6,6 +8,7 @@ import {
   normalizeXtreamBaseUrl,
   normalizeXtreamLiveOutputPreference,
 } from '../utils/xtream-url';
+import { isLunaAvailable, lunaRequest } from './luna';
 import { serviceBase } from './service-http';
 import { StorageService } from './storage-service';
 import { uploadIdFromUrl } from './upload-client';
@@ -356,6 +359,60 @@ class SetupClientImpl {
     return (playlistsChanged && playlistsStored) ||
       (epgChanged && epgStored) ||
       (subtitlesChanged && subtitlesStored);
+  }
+
+  async resetServiceData(): Promise<void> {
+    if (isLunaAvailable()) {
+      const lunaOk = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        let handle: { cancel(): void } | null = null;
+        const finish = (ok: boolean): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(ok);
+        };
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          handle?.cancel();
+          log.warn('Luna service resetData timed out');
+          resolve(false);
+        }, 3000);
+        try {
+          handle = lunaRequest(`luna://${CONFIG.SERVICE_ID}`, {
+            method: 'resetData',
+            parameters: {},
+            onSuccess: () => finish(true),
+            onFailure: (err) => {
+              log.warn('Luna service resetData failed:', err);
+              finish(false);
+            },
+          });
+        } catch (e) {
+          log.warn('Luna service resetData threw:', e);
+          finish(false);
+        }
+      });
+      if (lunaOk) return;
+    }
+
+    const base = serviceBase();
+    if (!base) return;
+    try {
+      const res = await fetchWithTimeout(
+        `${base}/reset`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        },
+        TIMEOUT,
+      );
+      if (!res.ok) log.warn('Service reset failed: HTTP', res.status);
+    } catch (e) {
+      log.warn('Service reset failed:', e);
+    }
   }
 }
 

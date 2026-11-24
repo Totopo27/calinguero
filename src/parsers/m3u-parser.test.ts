@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, vi } from 'vitest';
 import {
   decodePlaylistBytes,
@@ -978,6 +979,83 @@ describe('parseM3U', () => {
     const utf16Be = encodeUtf16(source, false);
     expect(parseM3UBytes(utf16Le).channels[0].name).toBe('Alpha');
     expect(parseM3UBytes(utf16Be).channels[0].name).toBe('Alpha');
+  });
+
+  it('rejects unsafe URL schemes for stream locations without leaking pending EXTM3U/EXTINF metadata', () => {
+    const m3u = [
+      '#EXTM3U url-tvg="http://host/epg.xml,file:///etc/passwd,javascript:alert(1)"',
+      '#EXTINF:-1 tvg-id="bad1" tvg-logo="javascript:alert(1)" seek_preview="file:///a/{utc}.jpg" catchup-source="file:///archive/{utc}",Blocked 1',
+      '#EXTVLCOPT:http-referrer=http://evil.invalid/',
+      'file:///etc/passwd',
+      'javascript:alert(1)',
+      'data:application/vnd.apple.mpegurl,#EXTM3U',
+      'blob:http://host/1',
+      'chrome://settings',
+      'luna://com.webos.media/load',
+      '#EXTINF:-1 tvg-id="ok1" tvg-logo="https://host/logo.png" seek_preview="https://host/p/{utc}.jpg" catchup="default" catchup-source="http://host/archive/{utc}",Allowed One',
+      'http://host/live/1.m3u8',
+      '/relative/path/2.m3u8',
+      'udp://@239.0.0.1:1234',
+      'rtp://@239.0.0.2:1234',
+      'rtsp://host/stream3',
+    ].join('\n');
+
+    const result = parseM3U(m3u);
+    expect(result.epgUrls).toEqual(['http://host/epg.xml']);
+    expect(result.channels.map(c => c.url)).toEqual([
+      'http://host/live/1.m3u8',
+      '/relative/path/2.m3u8',
+      'udp://@239.0.0.1:1234',
+      'rtp://@239.0.0.2:1234',
+      'rtsp://host/stream3',
+    ]);
+    expect(result.channels[0].extras).toBeNull();
+    expect(result.channels[0].httpHeaders).toBeUndefined();
+    expect(result.channels[0]).toMatchObject({
+      name: 'Allowed One',
+      logo: 'https://host/logo.png',
+      seekPreview: 'https://host/p/{utc}.jpg',
+      catchupSource: 'http://host/archive/{utc}',
+    });
+    expect(result.issues.filter(i => i.code === 'unsupported-scheme')).toHaveLength(6);
+  });
+
+  it('strips non-http(s) logo, seek_preview, and catchup-source URLs on allowed streams', () => {
+    const m3u = [
+      '#EXTM3U catchup="default" catchup-source="javascript:alert(1)"',
+      '#EXTINF:-1 tvg-logo="data:image/svg+xml,<svg/>" seek_preview="chrome://thumb/{utc}.jpg",Alpha',
+      'http://host/a.m3u8',
+      '#EXTINF:-1 tvg-logo="  https://host/logo.png  " catchup="append" catchup-source="?utc={utc}",Bravo',
+      'http://host/b.m3u8',
+    ].join('\n');
+
+    const result = parseM3U(m3u);
+    expect(result.channels[0]).toMatchObject({
+      logo: '',
+      catchupSource: '',
+    });
+    expect(result.channels[0].seekPreview).toBeUndefined();
+    expect(result.channels[1]).toMatchObject({
+      logo: 'https://host/logo.png',
+      catchupSource: '?utc={utc}',
+    });
+  });
+
+  it('rejects control-character and tab-obfuscated schemes in locations and catchup-source', () => {
+    const m3u = [
+      '#EXTM3U catchup="default" catchup-source="java\tscript:alert(1)"',
+      '#EXTINF:-1 catchup="default" catchup-source="fi\tle:///etc/passwd",Blocked Control 1',
+      'fi\tle:///etc/passwd',
+      '#EXTINF:-1,Blocked Control 2',
+      '\x01luna://com.webos.media/load',
+      '#EXTINF:-1 catchup="default" catchup-source="java\tscript:alert(1)",Valid After Controls',
+      'http://host/live/clean.m3u8',
+    ].join('\n');
+
+    const result = parseM3U(m3u);
+    expect(result.channels.map(c => c.url)).toEqual(['http://host/live/clean.m3u8']);
+    expect(result.channels[0].catchupSource).toBe('');
+    expect(result.issues.filter(i => i.code === 'unsupported-scheme')).toHaveLength(2);
   });
 });
 

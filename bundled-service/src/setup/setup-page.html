@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- NOTICE: Modified for the Calinguero project in 2026. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -2375,7 +2376,10 @@
   // Refresh persisted rows from /uploads. Leaves in-progress and just-finished
   // rows (data-id set after success) alone so a stale fetch doesn't wipe them.
   function refresh() {
-    fetch("/uploads").then(function (r) { return r.json(); }).then(function (items) {
+    fetch(authenticatedUrl("/uploads")).then(function (r) {
+      if (!r.ok) throw new Error("uploads");
+      return r.json();
+    }).then(function (items) {
       var existingIds = {};
       Array.from(list.querySelectorAll("li[data-id]")).forEach(function (n) { existingIds[n.dataset.id] = n; });
       var seen = {};

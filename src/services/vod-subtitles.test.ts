@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { fetchTextMock } = vi.hoisted(() => ({ fetchTextMock: vi.fn() }));
@@ -256,5 +257,24 @@ describe('VodSubtitles', () => {
     subs.clear();
     await subs.show(0);
     expect(addTextTrack).toHaveBeenCalledOnce();
+  });
+
+  it('redacts credentials and tokens in VOD sidecar subtitle logs', async () => {
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      fetchTextMock.mockResolvedValueOnce('1\n00:00:01,000 --> 00:00:02,000\nHi\n');
+      subs.attach(video, [sidecar({
+        url: 'http://host/movie/u1/secretp1/10.srt?token=secrets1',
+      })]);
+
+      await subs.show(0);
+
+      const logged = infoSpy.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain('http://host/movie/***/***/10.srt?token=***');
+      expect(logged).not.toContain('secretp1');
+      expect(logged).not.toContain('secrets1');
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });

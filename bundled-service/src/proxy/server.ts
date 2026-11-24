@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 /**
  * The loopback stream proxy: a separate HTTP server on 127.0.0.1 that
  * fetches a channel's manifests and segments with its HTTP headers, so the
@@ -14,15 +15,17 @@ import * as nodeUrl from 'url';
 import * as zlib from 'zlib';
 import { sanitizeHeaders } from '../fetch/manifest-fetch';
 import {
+  crossOriginHeaders,
   httpUrl,
+  isLoopbackAddress,
   isRedirect,
   nextHop,
   origin,
   requestHeaders,
   transport,
   upstreamOptions,
-  withoutCredentials,
 } from '../upstream';
+export { isLoopbackAddress } from '../upstream';
 import { createCookieJar, type CookieJar } from './cookie-jar';
 import { proxyUrl, rewriteDash, rewriteHls, sniffManifest, targetFromPath, type ManifestKind } from './rewrite';
 import { bufferFrom } from '../compat';
@@ -174,30 +177,6 @@ function controlOrigin(value: unknown): string | null {
   if (value === undefined) return '';
   return typeof value === 'string' && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d{1,5})?$/.test(value)
     ? value : null;
-}
-
-// 127/8, 0/8, ::1, ::, and their IPv4-mapped forms.
-export function isLoopbackAddress(address: string): boolean {
-  let host = String(address || '').toLowerCase();
-  if (host.charAt(0) === '[' && host.charAt(host.length - 1) === ']') host = host.slice(1, -1);
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
-  if (mapped) host = mapped[1];
-  if (net.isIPv4(host)) {
-    const first = Number(host.split('.')[0]);
-    return first === 127 || first === 0;
-  }
-  if (!net.isIPv6(host)) return false;
-  const halves = host.split('::');
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
-  const groups = head.concat(new Array(Math.max(0, 8 - head.length - tail.length) + 1).join('0').split(''), tail)
-    .map(group => parseInt(group || '0', 16));
-  if (groups.length !== 8) return false;
-  for (let i = 0; i < 5; i++) {
-    if (groups[i] !== 0) return false;
-  }
-  if (groups[5] === 0xffff) return (groups[6] >> 8) === 127 || (groups[6] >> 8) === 0;
-  return groups[5] === 0 && groups[6] === 0 && groups[7] <= 1;
 }
 
 export function createStreamProxy(options: ProxyOptions = {}): StreamProxy {
@@ -648,7 +627,7 @@ export function createStreamProxy(options: ProxyOptions = {}): StreamProxy {
 
     const target0 = first;
     const sessionOrigin = origin(target0) === session.origin;
-    const carried = sessionOrigin ? session.headers : withoutCredentials(session.headers);
+    const carried = sessionOrigin ? session.headers : crossOriginHeaders(session.headers);
     const auth = sessionOrigin ? session.auth : '';
     slotKey = origin(target0);
     slot = acquire(slotKey, () => {

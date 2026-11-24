@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Channel, ChannelCustomization } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
@@ -2738,5 +2739,67 @@ describe('PlaylistService progressive load', () => {
     await first;
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Alpha', 'Bravo']);
     expect(PlaylistService.loading).toBe(false);
+  });
+
+  it('ignores non-http(s) EPG URLs extracted from playlist metadata', async () => {
+    vi.mocked(fetchAndParseM3U).mockResolvedValueOnce({
+      data: {
+        channels: [],
+        groups: [],
+        epgUrl: 'file:///tmp/guide.xml',
+        epgUrls: ['file:///tmp/guide.xml', 'javascript:alert(1)', 'https://host/valid-epg.xml'],
+        headerAttributes: {},
+        format: 'extended-m3u',
+        issues: [],
+      },
+      metrics: {
+        transport: 'stream',
+        filter: 'none',
+        inputBytes: 10,
+        chunks: 1,
+        channelsKept: 0,
+        channelsDropped: 0,
+        elapsedMs: 0,
+      },
+    });
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'p1', name: 'P1', url: 'http://host/list.m3u', source: 'url' },
+    ]);
+
+    await PlaylistService.refresh();
+
+    expect(PlaylistService.epgSources).toEqual([
+      { url: 'https://host/valid-epg.xml', playlistIds: ['p1'], kind: 'm3u' },
+    ]);
+  });
+
+  it('redacts credentialed playlist and embedded EPG URLs in console logs', async () => {
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const secretUrl = 'http://u1:secretp1@host/get.php?username=u1&password=secretp1';
+      storageMock.getPlaylists.mockReturnValue([
+        { id: 'p1', name: '', url: secretUrl, source: 'url' },
+      ]);
+      fetchTextMock.mockResolvedValueOnce(
+        '#EXTM3U url-tvg="http://u1:secretp1@host/xmltv.php?password=secretp1"\n'
+        + '#EXTINF:-1,Alpha\nhttp://host/1.ts\n',
+      );
+      await PlaylistService.refresh();
+
+      fetchTextMock.mockRejectedValueOnce(new Error('network down'));
+      await PlaylistService.refresh();
+
+      const logged = [...infoSpy.mock.calls, ...warnSpy.mock.calls, ...errSpy.mock.calls]
+        .map(args => args.join(' '))
+        .join('\n');
+      expect(logged).toContain('fetch \'');
+      expect(logged).not.toContain('secretp1');
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+      errSpy.mockRestore();
+    }
   });
 });
