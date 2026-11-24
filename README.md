@@ -1,3 +1,44 @@
+# Calinguero
+
+**Status: M0 technical baseline, not a production-ready Calinguero release.**
+
+Calinguero is an incremental project for a centrally curated live TV,
+movie, and series experience across Android TV, LG webOS, and Samsung/Tizen.
+This repository currently contains the webOS baseline derived from
+[lennylxx/webos-iptv-player](https://github.com/lennylxx/webos-iptv-player),
+with its history, license, and attributions preserved.
+
+The application still uses its original name, version, and identifier.
+Automatic central catalog provisioning and Calinguero runtime branding are
+not implemented. Android TV and Samsung/Tizen clients are planned work,
+not working clients included in this tree.
+
+## Project documentation
+
+- [Public project plan and current evidence](docs/PROJECT_PLAN.md)
+- [Samsung/Tizen research and proposed feasibility proof](docs/SAMSUNG_TIZEN_RESEARCH.md)
+
+The original webOS base has passed local build and test checks, including
+the service smoke test on Node.js 0.12.2. Installation, playback, and
+catalog updates have not been validated on the project's target TVs.
+No installer Release or hosted project website is part of this initial
+source publication.
+
+## Origin and license
+
+This is an independently maintained derivative, not an official release
+of the upstream project. Calinguero changes in the modified test files
+are identified by modification notices. Preserve [LICENSE](LICENSE),
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), and applicable dependency
+notices when redistributing. Software licenses do not grant rights to
+redistribute media or provider accounts.
+
+## Upstream webOS base documentation
+
+The original documentation below is retained for the baseline. Its feature
+descriptions are not evidence that Calinguero's target-TV acceptance tests
+have been completed.
+
 <div align="center">
   <img src="assets/icon.svg" alt="webOS IPTV Player icon">
   <h1>webOS IPTV Player</h1>
@@ -204,6 +245,15 @@ and detect updates from later GitHub releases.
 ```bash
 npm install
 ```
+
+### Tests
+
+Run unit and integration tests with `npm test`. On native Windows, the
+native-probe regression requires Git for Windows on `PATH` and uses its
+`sh.exe` to execute the real POSIX command with local fixtures.
+The cache test checks the requested creation permissions on every platform
+and the resulting POSIX permissions on non-Windows hosts; it does not verify
+Windows ACLs. Actual TV debugging still requires WSL 2 on Windows.
 
 ### Build
 

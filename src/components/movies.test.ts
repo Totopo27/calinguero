@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Action, PlaylistEntry, ResumeEntry, VodItem, WatchlistEntry, WatchlistKind } from '../types';
 import type { CatalogSortPreference } from '../utils/catalog-sort';
@@ -1519,23 +1520,27 @@ describe('Movies browse + grid', () => {
   });
 
   it('returns focus to an All Categories tile beyond the first rendered window', async () => {
-    const cats = Array.from({ length: 60 }, (_, i) => ({ id: String(i + 1), name: `Cat ${String(i + 1)}` }));
+    const cats = Array.from({ length: 15 }, (_, i) => ({ id: String(i + 1), name: `Cat ${String(i + 1)}` }));
     catalogMock.loadVodCategories.mockResolvedValue(cats);
     catalogMock.loadVodStreams.mockResolvedValue([]);
     const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
     Focus.setBase(() => view.focusScope);
     await view.open(account);
-    container.querySelector<HTMLElement>('.catalog-cat[data-category-id="1"]')!
+    expect(container.querySelector('.catalog-cat[data-category-id="1"]')).not.toBeNull();
+    expect(container.querySelector('.catalog-cat[data-category-id="14"]')).not.toBeNull();
+    expect(container.querySelector('.catalog-cat[data-category-id="15"]')).toBeNull();
+    // Cross the initial rendered boundary without forty redundant browse renders.
+    container.querySelector<HTMLElement>('.catalog-cat[data-category-id="14"]')!
       .dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
-    for (let i = 0; i < 40; i++) view.handleAction('right');
-    expect(focusedKey()).toBe('c:41');
+    pressKey(view, 'right');
+    expect(focusedKey()).toBe('c:15');
     expect(container.querySelector('.catalog-cat[data-category-id="1"]')).toBeNull();
     view.handleAction('select');
     await Promise.resolve();
     await Promise.resolve();
-    expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 41');
+    expect(container.querySelector('.catalog-grid-title')?.textContent).toBe('Cat 15');
     view.handleAction('back');
-    expect(focusedKey()).toBe('c:41');
+    expect(focusedKey()).toBe('c:15');
   });
 
   describe('rail edge gutter', () => {

@@ -1,7 +1,8 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -367,6 +368,15 @@ describe('diagnostic report assembly', () => {
   });
 
   it('bounds native previews when the server ignores Range', () => {
+    const shell = process.platform === 'win32'
+      ? path.resolve(
+        execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(),
+        '../../../usr/bin/sh.exe',
+      )
+      : '/bin/sh';
+    if (!existsSync(shell)) {
+      throw new Error('This regression requires a POSIX shell; on Windows, use Git for Windows.');
+    }
     const bin = mkdtempSync(path.join(tmpdir(), 'tv-diag-native-'));
     try {
       writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nprintf 12\n', { mode: 0o755 });
@@ -384,9 +394,12 @@ exit 23
 `, { mode: 0o755 });
 
       const result = runNativeProbe('http://host/a', {
-        execFile: (_file, args, options) => execFileSync('/bin/sh', ['-c', args[1]], {
+        execFile: (_file, args, options) => execFileSync(shell, ['-c', args[1]], {
           ...options,
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+          env: {
+            ...process.env,
+            PATH: [bin, path.dirname(shell), process.env.PATH].join(path.delimiter),
+          },
         }),
       }, 15_000);
 

@@ -1,5 +1,6 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
@@ -494,8 +495,16 @@ describe('TV wake', () => {
 
   it('remembers MACs per IP in a private cache file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tv-wake-'));
+    const file = cacheFile({ XDG_CACHE_HOME: dir });
+    const fs = createRequire(import.meta.url)('node:fs');
+    const originalWrite = fs.writeFileSync;
+    const modes = [];
+    fs.writeFileSync = (target, data, options) => {
+      if (target === file) modes.push(options?.mode);
+      return originalWrite(target, data, options);
+    };
+    syncBuiltinESMExports();
     try {
-      const file = cacheFile({ XDG_CACHE_HOME: dir });
       expect(file).toBe(join(dir, 'webos-iptv-player', 'wake.json'));
       expect(readCachedMac('10.0.0.2', file)).toBeNull();
       writeCachedMac('10.0.0.2', mac, file);
@@ -504,8 +513,14 @@ describe('TV wake', () => {
       expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
         '10.0.0.2': mac, '10.0.0.3': '02:00:00:00:00:02',
       });
-      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(modes).toEqual([0o600, 0o600]);
+      // Windows mode bits do not represent owner/group permissions or ACLs.
+      if (process.platform !== 'win32') {
+        expect(statSync(file).mode & 0o777).toBe(0o600);
+      }
     } finally {
+      fs.writeFileSync = originalWrite;
+      syncBuiltinESMExports();
       rmSync(dir, { recursive: true, force: true });
     }
   });
