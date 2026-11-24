@@ -1,3 +1,4 @@
+<!-- NOTICE: Modified for the Calinguero project in 2026. -->
 # AGENTS.md
 
 IPTV player for LG webOS TVs. Vanilla TypeScript (no UI framework), bundled
@@ -102,8 +103,10 @@ and `tsc` strictness are real gates.
 app, `tests`, `service`, **and** `benchmarks`; `npm run lint` and the
 compat gate; `vitest run`) in parallel with Playwright E2E split across
 four `e2e` shards; once both pass, `package` runs the esbuild bundle,
-`service:smoke:matrix`, and packages the IPK. Pushes/PRs to `main`
-build; tagged `v*` pushes publish a GitHub release with the `.ipk`.
+`service:smoke:matrix`, packages the IPK, and uploads it as a workflow
+artifact under `permissions: contents: read`. Pushes/PRs to `main` and
+manual dispatches build; automated `v*` GitHub Releases and GitHub Pages
+deployments are disabled during M0.
 
 ## Versioning
 

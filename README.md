@@ -27,17 +27,21 @@ source publication.
 ## Origin and license
 
 This is an independently maintained derivative, not an official release
-of the upstream project. Calinguero changes in the modified test files
-are identified by modification notices. Preserve [LICENSE](LICENSE),
+of the upstream project. Calinguero changes across modified upstream
+files (application source, bundled service, workflows, scripts, docs,
+and tests) carry prominent 2026 modification notices. `README.md` itself
+was also modified in this preface and in the `### Tests` subsection
+under [Development](#development). Preserve [LICENSE](LICENSE),
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), and applicable dependency
 notices when redistributing. Software licenses do not grant rights to
 redistribute media or provider accounts.
 
 ## Upstream webOS base documentation
 
-The original documentation below is retained for the baseline. Its feature
-descriptions are not evidence that Calinguero's target-TV acceptance tests
-have been completed.
+The original documentation below is retained for the baseline (with
+Calinguero additions noted above). Its feature descriptions are not
+evidence that Calinguero's target-TV acceptance tests have been
+completed.
 
 <div align="center">
   <img src="assets/icon.svg" alt="webOS IPTV Player icon">
