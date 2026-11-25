@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { Action, ChannelCycleMode, EpgSource, ManualEpgSource, NavDirection, PlaylistEntry, TzMode, XtreamLiveCategoryFilter, XtreamLiveCategorySnapshot } from '../types';
 import { $, $$, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
@@ -781,17 +782,21 @@ export class Settings {
   render(): void {
     this.pendingLiveCategories.clear();
     const allPlaylists = StorageService.getPlaylists();
-    const playlists = allPlaylists.filter(pl => pl.source !== 'upload' && pl.source !== 'xtream');
-    const accounts = allPlaylists.filter(pl => pl.source === 'xtream');
-    const enabledAccounts = accounts.filter(isSourceEnabled);
+    const playlists = allPlaylists.filter(
+      pl => !pl.managed && pl.source !== 'upload' && pl.source !== 'xtream',
+    );
+    const allXtream = allPlaylists.filter(pl => pl.source === 'xtream');
+    const accounts = allXtream.filter(pl => !pl.managed);
+    const enabledAccounts = allXtream.filter(isSourceEnabled);
     const selectedAccountId = StorageService.getSelectedXtreamAccountId();
     this.watchlistAccount = enabledAccounts.find((account) => account.id === selectedAccountId)
       ?? enabledAccounts[0] ?? null;
-    const uploads = allPlaylists.filter(pl => pl.source === 'upload');
-    const manualEpgSources = StorageService.getManualEpgSources();
+    const uploads = allPlaylists.filter(pl => pl.source === 'upload' && !pl.managed);
+    const storedManualEpgSources = StorageService.getManualEpgSources();
+    const manualEpgSources = storedManualEpgSources.filter(source => !source.managed);
     this.storedEpgOffsets = StorageService.getEpgOffsets();
     this.epgOffsets = { ...this.storedEpgOffsets };
-    const epgSources = this.epgSources(manualEpgSources, allPlaylists);
+    const epgSources = this.epgSources(storedManualEpgSources, allPlaylists);
     const autoPlay = StorageService.getAutoPlay();
     const livePreview = StorageService.getLivePreview();
     const channelCycleMode = StorageService.getChannelCycleMode();
@@ -1421,7 +1426,10 @@ export class Settings {
     const editor = $('.epg-offset-editor', this.container);
     if (!editor) return;
     const playlists = StorageService.getPlaylists();
-    const sources = this.epgSources(manualSources, playlists);
+    const managedManual = StorageService.getManualEpgSources().filter(source => source.managed === true);
+    const seen = new Set(manualSources.map(source => source.url));
+    const mergedManual = [...manualSources, ...managedManual.filter(source => !seen.has(source.url))];
+    const sources = this.epgSources(mergedManual, playlists);
     morph(editor, this.epgOffsetEditor(sources, playlists, selectedUrl));
   }
 
@@ -2421,13 +2429,20 @@ export class Settings {
       }))
       .filter(account => account.id !== '');
     const uploads = StorageService.getPlaylists()
-      .filter(playlist => playlist.source === 'upload')
+      .filter(playlist => playlist.source === 'upload' && !playlist.managed)
       .map(playlist => ({
         id: playlist.id,
         name: playlist.name,
         url: playlist.url,
       }));
-    return [...playlists, ...accounts, ...uploads];
+    const managed = StorageService.getPlaylists()
+      .filter(playlist => playlist.managed)
+      .map(playlist => ({
+        id: playlist.id,
+        name: playlist.name,
+        url: playlist.url,
+      }));
+    return [...playlists, ...accounts, ...uploads, ...managed];
   }
 
   private refreshManualEpgScopes(): void {
@@ -2829,20 +2844,23 @@ export class Settings {
 
     const nonUpload = [...playlists, ...accounts];
 
-    // Preserve auto-managed uploaded playlists (not shown in the editors above).
+    // Preserve auto-managed uploaded playlists and central catalog entries
+    // (not shown in the manual source editors above).
     const stored = StorageService.getPlaylists();
-    const uploads = stored.filter(pl => pl.source === 'upload').map((playlist) => {
+    const uploads = stored.filter(pl => pl.source === 'upload' && !pl.managed).map((playlist) => {
       const toggle = this.container.querySelector<HTMLElement>(
         `#upload-entries [data-id="${playlist.id}"] .source-toggle`,
       );
       return withEnabledState(playlist, toggle?.dataset.enabled !== 'false');
     });
-    const nextSources = [...nonUpload, ...uploads];
-    const manualEpgSources = this.manualEpgSourcesFromEditor(
+    const managedPlaylists = stored.filter(pl => pl.managed);
+    const nextSources = [...nonUpload, ...uploads, ...managedPlaylists];
+    const previousManualEpgSources = StorageService.getManualEpgSources();
+    const editedManualEpgSources = this.manualEpgSourcesFromEditor(
       new Set(nextSources.map(source => source.id)),
     );
     const seenEpgUrls = new Set<string>();
-    const duplicateEpgUrl = manualEpgSources.find(source => {
+    const duplicateEpgUrl = editedManualEpgSources.find(source => {
       if (seenEpgUrls.has(source.url)) return true;
       seenEpgUrls.add(source.url);
       return false;
@@ -2859,6 +2877,11 @@ export class Settings {
       return;
     }
 
+    const managedEpgSources = previousManualEpgSources.filter(
+      source => source.managed && !seenEpgUrls.has(source.url),
+    );
+    const manualEpgSources = [...editedManualEpgSources, ...managedEpgSources];
+
     // A re-pointed account loses its old snapshot on save; keep the one its picker just reviewed.
     if (StorageService.setPlaylists(nextSources)) {
       for (const [reviewedId, reviewed] of reviewedSnapshots) {
@@ -2866,7 +2889,6 @@ export class Settings {
       }
     }
 
-    const previousManualEpgSources = StorageService.getManualEpgSources();
     StorageService.setManualEpgSources(manualEpgSources);
 
     const autoPlayBtn = $('#auto-play .toggle-option.active', this.container);
@@ -3076,7 +3098,7 @@ export class Settings {
     const target = $('#upload-entries', this.container);
     if (!target) return;
 
-    const uploads = StorageService.getPlaylists().filter(pl => pl.source === 'upload');
+    const uploads = StorageService.getPlaylists().filter(pl => pl.source === 'upload' && !pl.managed);
     morph(target, uploads.length
       ? html`${uploads.map((pl) =>
           uploadRow(pl, pending.get(pl.id || pl.url) ?? isSourceEnabled(pl)))}`

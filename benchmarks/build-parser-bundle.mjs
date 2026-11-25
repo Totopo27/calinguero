@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import * as esbuild from 'esbuild';
 import { mkdir, readFile } from 'node:fs/promises';
 import {
@@ -14,6 +15,7 @@ const define = {
   __APP_VERSION__: JSON.stringify('0.0.0-benchmark'),
   __SERVICE_ID__: JSON.stringify(service.id),
   __ENABLE_PSEUDO_LOCALE__: 'false',
+  __CATALOG_URL__: '""',
 };
 await mkdir('test-output/benchmarks', { recursive: true });
 await esbuild.build({

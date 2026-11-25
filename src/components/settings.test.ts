@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import type { Channel, ChannelCycleMode, ManualEpgSource, PlaylistEntry, TzMode, XtreamLiveCategorySnapshot } from '../types';
 import type { AnimationMode } from '../services/motion-service';
@@ -28,6 +29,8 @@ const {
       url: string;
       source?: 'upload' | 'url' | 'xtream';
       enabled?: boolean;
+      managed?: boolean;
+      catalogRevision?: string;
       count?: number;
       xtream?: {
         username: string;
@@ -3023,5 +3026,86 @@ describe('Settings re-render', () => {
     expect(container.querySelector('#playlist-entries img')).toBeNull();
     expect(container.querySelector('.playlist-header-row label')!.textContent).toBe(XSS);
     expect(container.querySelector<HTMLInputElement>('.playlist-name')!.value).toBe(XSS);
+  });
+
+  it('hides centrally managed sources from Settings editors and preserves them on save', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a', source: 'url' },
+      {
+        id: 'm1',
+        name: 'Central Live',
+        url: 'https://host/central.m3u',
+        source: 'url',
+        managed: true,
+        catalogRevision: 'rev-1',
+      },
+      {
+        id: 'm2',
+        name: 'Central VOD',
+        url: 'http://host/portal',
+        source: 'xtream',
+        managed: true,
+        catalogRevision: 'rev-1',
+        xtream: { username: 'u1', password: 'p1' },
+      },
+    ];
+    state.manualEpgSources = [
+      { url: 'http://host/user-epg.xml', playlistIds: ['p1'] },
+      { url: 'https://host/central-epg.xml', playlistIds: ['m1'], managed: true },
+    ];
+    settings.render();
+
+    expect(container.querySelectorAll('#playlist-entries [data-source-entry]')).toHaveLength(1);
+    expect(container.querySelectorAll('#xtream-entries .xtream-card')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-manual-epg-source]')).toHaveLength(1);
+
+    click('#save-settings');
+
+    expect(storageMock.setPlaylists).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'p1', url: 'http://host/a' }),
+      expect.objectContaining({ id: 'm1', managed: true, catalogRevision: 'rev-1' }),
+      expect.objectContaining({ id: 'm2', managed: true, catalogRevision: 'rev-1' }),
+    ]);
+    expect(state.manualEpgSources).toEqual([
+      { url: 'http://host/user-epg.xml', playlistIds: ['p1'] },
+      { url: 'https://host/central-epg.xml', playlistIds: ['m1'], managed: true },
+    ]);
+  });
+
+  it('keeps centrally managed EPG sources in #epg-offset-source while editing manual EPG rows', () => {
+    state.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a', source: 'url' },
+      { id: 'm1', name: 'Central Live', url: 'https://host/central.m3u', source: 'url', managed: true },
+    ];
+    state.manualEpgSources = [
+      { url: 'http://host/user-epg.xml', playlistIds: ['p1'] },
+      { url: 'https://host/central-epg.xml', playlistIds: ['m1'], managed: true },
+    ];
+    settings.render();
+
+    click('.remove-epg-source');
+
+    const values = Array.from(container.querySelectorAll('#epg-offset-source .dropdown-option'))
+      .map(el => el.getAttribute('data-dropdown-value'));
+    expect(values).toContain('https://host/central-epg.xml');
+  });
+
+  it('excludes centrally managed entries from refreshUploads()', async () => {
+    state.playlists = [
+      { id: 'u1', name: 'User Upload', url: 'http://127.0.0.1:8890/uploads/u1.m3u', source: 'upload' },
+      {
+        id: 'mu1',
+        name: 'Managed Upload',
+        url: 'http://127.0.0.1:8890/uploads/mu1.m3u',
+        source: 'upload',
+        managed: true,
+      },
+    ];
+    settings.render();
+    await settings.refreshUploads();
+
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('#upload-entries [data-source-entry]'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dataset.id).toBe('u1');
   });
 });

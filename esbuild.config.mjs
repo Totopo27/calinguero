@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import * as esbuild from 'esbuild';
 import { cpSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync } from 'fs';
 import {
@@ -71,6 +72,7 @@ const define = {
   '__APP_ID__': JSON.stringify(appinfo.id),
   '__SERVICE_ID__': JSON.stringify(serviceId),
   '__ENABLE_PSEUDO_LOCALE__': JSON.stringify(isPreview),
+  '__CATALOG_URL__': JSON.stringify(process.env.CALINGUERO_CATALOG_URL || ''),
 };
 // Target Chromium 53 — the engine on webOS 4. This down-levels newer
 // syntax (`?.`, `??`, etc.) which would otherwise fail to parse on

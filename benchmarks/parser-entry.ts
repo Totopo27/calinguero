@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { parseM3U } from '../src/parsers/m3u-parser';
 import { parseXMLTVWithStats, XMLTVStreamParser } from '../src/parsers/xmltv-parser';
 import { fetchAndParseXMLTV } from '../src/parsers/xmltv-loader';
@@ -66,6 +67,7 @@ declare global {
   const __APP_VERSION__: string;
   const __SERVICE_ID__: string;
   const __ENABLE_PSEUDO_LOCALE__: boolean;
+  const __CATALOG_URL__: string;
 
   interface Window {
     __IPTV_BENCHMARK__?: BenchmarkParserApi;

@@ -111,7 +111,7 @@ class SetupClientImpl {
     const onlineSubtitles = StorageService.getOnlineSubtitleConfig();
     const state: SetupState = {
       playlists: playlists
-        .filter(item => item.source !== 'upload' && item.source !== 'xtream')
+        .filter(item => !item.managed && item.source !== 'upload' && item.source !== 'xtream')
         .map(item => ({
           id: item.id,
           name: item.name,
@@ -119,7 +119,7 @@ class SetupClientImpl {
           ...(isSourceEnabled(item) ? {} : { enabled: false }),
         })),
       xtreamAccounts: playlists
-        .filter(item => item.source === 'xtream' && item.xtream)
+        .filter(item => !item.managed && item.source === 'xtream' && item.xtream)
         .map(item => ({
           id: item.id,
           name: item.name,
@@ -128,13 +128,13 @@ class SetupClientImpl {
           ...(isSourceEnabled(item) ? {} : { enabled: false }),
         })),
       uploadedPlaylists: playlists
-        .filter(item => item.source === 'upload')
+        .filter(item => !item.managed && item.source === 'upload')
         .map(item => ({
           id: item.id,
           uploadId: uploadIdFromUrl(item.url),
           ...(isSourceEnabled(item) ? {} : { enabled: false }),
         })),
-      manualEpgSources: StorageService.getManualEpgSources(),
+      manualEpgSources: StorageService.getManualEpgSources().filter(item => !item.managed),
       onlineSubtitles: {
           preferredLanguage: onlineSubtitles.preferredLanguage,
           subdlConfigured: onlineSubtitles.subdl.apiKey.trim() !== '',
@@ -221,7 +221,7 @@ class SetupClientImpl {
       if (action.type === 'playlist' && typeof action.url === 'string' &&
           typeof action.name === 'string') {
         const existing = playlists.findIndex(item =>
-          item.source !== 'upload' && item.source !== 'xtream' && item.url === action.url);
+          !item.managed && item.source !== 'upload' && item.source !== 'xtream' && item.url === action.url);
         const name = action.name.trim() ||
           (existing >= 0 ? playlists[existing].name : new URL(action.url).hostname);
         const entry: PlaylistEntry = {
@@ -242,7 +242,7 @@ class SetupClientImpl {
           typeof action.password === 'string') {
         const url = normalizeXtreamBaseUrl(action.serverUrl);
         const existing = playlists.findIndex(item =>
-          item.source === 'xtream' && item.url === url &&
+          !item.managed && item.source === 'xtream' && item.url === url &&
           item.xtream?.username === action.username);
         const entry: PlaylistEntry = {
           id: existing >= 0 ? playlists[existing].id : genPlaylistId(),
@@ -268,10 +268,14 @@ class SetupClientImpl {
         playlistActionIds.push(action.id);
       } else if (action.type === 'manual-epg-sources' &&
           Array.isArray(action.sources)) {
-        manualEpgSources = action.sources.map(source => ({
+        const edited = action.sources.map(source => ({
           url: source.url,
           playlistIds: source.playlistIds.slice(),
         }));
+        const managedEpg = previousManualEpgSources.filter(
+          source => source.managed && !edited.some(candidate => candidate.url === source.url),
+        );
+        manualEpgSources = [...edited, ...managedEpg];
         epgActionIds.push(action.id);
       } else if (action.type === 'remove-source' &&
           typeof action.sourceId === 'string') {
@@ -282,12 +286,16 @@ class SetupClientImpl {
           continue;
         }
         playlists = playlists.filter(item =>
-          item.source === 'upload' || item.id !== action.sourceId);
+          item.managed || item.source === 'upload' || item.id !== action.sourceId);
         playlistActionIds.push(action.id);
       } else if (action.type === 'set-source-enabled' &&
           typeof action.sourceId === 'string' &&
           typeof action.enabled === 'boolean') {
         const existing = playlists.findIndex(item => item.id === action.sourceId);
+        if (existing >= 0 && playlists[existing].managed) {
+          playlistActionIds.push(action.id);
+          continue;
+        }
         if (existing >= 0 && !action.enabled &&
             ParentalControlService.guardsSourceRemoval(action.sourceId)) {
           log.warn('Ignoring turning off a parental-locked source', 'event=parental.phone.refused',

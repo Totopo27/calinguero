@@ -1,9 +1,14 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 export const CONFIG = {
   APP_ID: __APP_ID__ as string,
   APP_NAME: 'webOS IPTV Player',
   VERSION: __APP_VERSION__ as string,
+  CATALOG_URL: __CATALOG_URL__ as string,
 
   STORAGE_PREFIX: 'iptv_',
+  STORAGE_KEYS: {
+    CATALOG_URL: 'iptv_catalog_url',
+  },
 
   // Versioned channel customization record (order, display, grouping, and EPG overrides).
   // Bump when its shape changes so an older payload is ignored, not misapplied.

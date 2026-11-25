@@ -5,7 +5,7 @@ import type { PlaylistEntry } from '../types';
 const { storageMock, fetchWithTimeoutMock, lunaMock } = vi.hoisted(() => ({
   storageMock: {
     playlists: [] as Array<Omit<PlaylistEntry, 'id'> & { id?: string }>,
-    manualEpgSources: [] as Array<{ url: string; playlistIds: string[] }>,
+    manualEpgSources: [] as Array<{ url: string; playlistIds: string[]; managed?: boolean }>,
     onlineSubtitles: {
       preferredLanguage: '',
       subdl: { apiKey: '' },
@@ -803,5 +803,55 @@ describe('SetupClient.resetServiceData', () => {
     lunaMock.available = false;
     setServicePort(null);
     await expect(SetupClient.resetServiceData()).resolves.toBeUndefined();
+  });
+
+  it('hides centrally managed sources in publishState and preserves them across phone actions', async () => {
+    setServicePort(8890);
+    storageMock.playlists = [
+      { id: 'p1', name: 'Alpha', url: 'http://host/a.m3u', source: 'url' },
+      {
+        id: 'm1',
+        name: 'Central Live',
+        url: 'https://host/central.m3u',
+        source: 'url',
+        managed: true,
+        catalogRevision: 'rev-1',
+      },
+      {
+        id: 'm2',
+        name: 'Central VOD',
+        url: 'http://host/portal',
+        source: 'xtream',
+        managed: true,
+        catalogRevision: 'rev-1',
+        xtream: { username: 'u1', password: 'p1' },
+      },
+    ];
+    storageMock.manualEpgSources = [
+      { url: 'http://host/epg.xml', playlistIds: ['p1'] },
+      { url: 'https://host/central-epg.xml', playlistIds: ['m1'], managed: true },
+    ];
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({ updated: true }));
+
+    await expect(SetupClient.publishState()).resolves.toBe(true);
+    const published = JSON.parse(String(fetchWithTimeoutMock.mock.calls[0][1].body));
+    expect(published.playlists).toEqual([{ id: 'p1', name: 'Alpha', url: 'http://host/a.m3u' }]);
+    expect(published.xtreamAccounts).toEqual([]);
+    expect(published.manualEpgSources).toEqual([{ url: 'http://host/epg.xml', playlistIds: ['p1'] }]);
+
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(jsonResponse([
+        { id: 1, type: 'remove-source', sourceId: 'm1' },
+        { id: 2, type: 'manual-epg-sources', sources: [{ url: 'http://host/user-2.xml', playlistIds: [] }] },
+      ]))
+      .mockResolvedValue(jsonResponse({ deleted: true }));
+
+    await expect(SetupClient.applyPendingActions()).resolves.toBe(true);
+    const updatedPlaylists = storageMock.setPlaylists.mock.calls[0]?.[0] ?? storageMock.playlists;
+    expect(updatedPlaylists.some((p: PlaylistEntry) => p.id === 'm1')).toBe(true);
+    expect(storageMock.manualEpgSources).toEqual([
+      { url: 'http://host/user-2.xml', playlistIds: [] },
+      { url: 'https://host/central-epg.xml', playlistIds: ['m1'], managed: true },
+    ]);
   });
 });

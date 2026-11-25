@@ -7,6 +7,7 @@ import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { ChannelHealthService } from './services/channel-health';
 import { StorageService } from './services/storage-service';
+import { CatalogBootstrapService } from './services/catalog-bootstrap';
 import {
   clearAllCachedData,
   clearCachedCatalog,
@@ -406,6 +407,7 @@ class App {
     this.initSidebarTrigger();
 
     done();
+    await CatalogBootstrapService.sync();
     this.enterChannelsAfterUploadSync = StorageService.getPlaylists().length === 0;
     this.bindBundledServiceLifecycle();
     this.bindReminderLifecycle();

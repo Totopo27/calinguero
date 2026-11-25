@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { readFileSync } from 'fs';
 import { defineConfig } from 'vitest/config';
 
@@ -13,6 +14,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify('0.0.0-test'),
     __SERVICE_ID__: JSON.stringify(serviceId),
     __ENABLE_PSEUDO_LOCALE__: JSON.stringify(true),
+    __CATALOG_URL__: JSON.stringify(''),
   },
   test: {
     // Default to Node. DOM-dependent tests opt in per-file with:
