@@ -1,5 +1,7 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
+import { getPlatformAdapter, type PlatformKeyCodes } from '../platform/platform-adapter';
 import { createLogger } from '../utils/logger';
 import { Focus, type FocusScope } from './focus-scope';
 import { InputMode, notifyPointerGone, setCursorHidden, setInputMode } from './input-mode';
@@ -9,30 +11,33 @@ import type { Action, NumberEvent } from '../types';
 type ActionHandler = (action: Action, event?: NumberEvent) => void;
 
 const log = createLogger('Key');
-const K = CONFIG.KEYS;
 const WHEEL_SCROLL_WINDOW_MS = 1000;
 const HOVER_SYNC_DELAY_MS = 60;
 
-const ACTION_MAP: Record<number, Action> = {
-  [K.UP]: 'up',
-  [K.DOWN]: 'down',
-  [K.LEFT]: 'left',
-  [K.RIGHT]: 'right',
-  [K.ENTER]: 'select',
-  [K.BACK]: 'back',
-  [K.ESC]: 'back', // Escape key for desktop
-  [K.RED]: 'red',
-  [K.GREEN]: 'green',
-  [K.YELLOW]: 'yellow',
-  [K.BLUE]: 'blue',
-  [K.CH_UP]: 'channel_up',
-  [K.CH_DOWN]: 'channel_down',
-  [K.PLAY]: 'play',
-  [K.PAUSE]: 'pause',
-  [K.STOP]: 'stop',
-  [K.REWIND]: 'rewind',
-  [K.FORWARD]: 'fast_forward',
-};
+function actionForKeyCode(keyCode: number, keys: PlatformKeyCodes): Action | undefined {
+  switch (keyCode) {
+    case keys.UP: return 'up';
+    case keys.DOWN: return 'down';
+    case keys.LEFT: return 'left';
+    case keys.RIGHT: return 'right';
+    case keys.ENTER: return 'select';
+    case keys.BACK:
+    case keys.ESC:
+      return 'back';
+    case keys.RED: return 'red';
+    case keys.GREEN: return 'green';
+    case keys.YELLOW: return 'yellow';
+    case keys.BLUE: return 'blue';
+    case keys.CH_UP: return 'channel_up';
+    case keys.CH_DOWN: return 'channel_down';
+    case keys.PLAY: return 'play';
+    case keys.PAUSE: return 'pause';
+    case keys.STOP: return 'stop';
+    case keys.REWIND: return 'rewind';
+    case keys.FORWARD: return 'fast_forward';
+    default: return undefined;
+  }
+}
 
 // Remote-control keys that must still reach the app even when a text input has
 // focus. Text-editing keys are deliberately excluded so the input keeps them:
@@ -41,10 +46,20 @@ const ACTION_MAP: Record<number, Action> = {
 // Without this, pressing these dedicated buttons while the search box is focused
 // (its blinking caret) did nothing — Back couldn't exit, Red/Blue couldn't open
 // EPG/Settings, etc.
-const INPUT_PASSTHROUGH_KEYS = new Set<number>([
-  K.BACK, K.RED, K.GREEN, K.YELLOW, K.BLUE,
-  K.CH_UP, K.CH_DOWN, K.PLAY, K.PAUSE, K.STOP, K.REWIND, K.FORWARD,
-]);
+function isInputPassthroughKey(keyCode: number, keys: PlatformKeyCodes): boolean {
+  return keyCode === keys.BACK
+    || keyCode === keys.RED
+    || keyCode === keys.GREEN
+    || keyCode === keys.YELLOW
+    || keyCode === keys.BLUE
+    || keyCode === keys.CH_UP
+    || keyCode === keys.CH_DOWN
+    || keyCode === keys.PLAY
+    || keyCode === keys.PAUSE
+    || keyCode === keys.STOP
+    || keyCode === keys.REWIND
+    || keyCode === keys.FORWARD;
+}
 
 let activeHandler: ActionHandler | null = null;
 let numberBuffer = '';
@@ -114,16 +129,19 @@ function handleNumber(digit: number): void {
 
 export const KeyHandler = {
   init(): void {
+    getPlatformAdapter().registerKeys();
+
     // Capture phase, and logging only: components with their own keydown
     // listeners stop propagation, so a bubble-phase log never sees those
     // presses — and a button that "does nothing" must still leave a trace.
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       const code = e.keyCode;
+      const keys = getPlatformAdapter().keys;
       const tag = (e.target as HTMLElement).tagName;
       const inText = tag === 'INPUT' || tag === 'TEXTAREA';
-      const mapped = ACTION_MAP[code];
-      const isDigit = code >= K.NUM_0 && code <= K.NUM_9;
-      const remoteButton = mapped !== undefined || INPUT_PASSTHROUGH_KEYS.has(code);
+      const mapped = actionForKeyCode(code, keys);
+      const isDigit = code >= keys.NUM_0 && code <= keys.NUM_9;
+      const remoteButton = mapped !== undefined || isInputPassthroughKey(code, keys);
       // Character keys typed into a text field keep their code out of the log:
       // it would spell out the search query into a shareable diag report.
       const codeField = inText && !remoteButton ? 'code=hidden' : `code=${code}`;
@@ -135,9 +153,10 @@ export const KeyHandler = {
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       // Let input fields handle their own text-editing keys, but dedicated
       // remote-control buttons (Back, colored, channel, media) must still reach
-      // the app — see INPUT_PASSTHROUGH_KEYS.
+      // the app — see isInputPassthroughKey.
+      const keys = getPlatformAdapter().keys;
       const tag = (e.target as HTMLElement).tagName;
-      if ((tag === 'INPUT' || tag === 'TEXTAREA') && !INPUT_PASSTHROUGH_KEYS.has(e.keyCode)) {
+      if ((tag === 'INPUT' || tag === 'TEXTAREA') && !isInputPassthroughKey(e.keyCode, keys)) {
         // No code here on purpose: it would spell out what is being typed.
         log.debug('Key ignored', 'event=key.ignored', 'reason=text_input');
         return;
@@ -145,13 +164,13 @@ export const KeyHandler = {
 
       const keyCode = e.keyCode;
 
-      if (keyCode >= K.NUM_0 && keyCode <= K.NUM_9) {
+      if (keyCode >= keys.NUM_0 && keyCode <= keys.NUM_9) {
         e.preventDefault();
-        handleNumber(keyCode - K.NUM_0);
+        handleNumber(keyCode - keys.NUM_0);
         return;
       }
 
-      const action = ACTION_MAP[keyCode];
+      const action = actionForKeyCode(keyCode, keys);
       cancelNumber();
       if (action) {
         e.preventDefault();
@@ -262,15 +281,16 @@ export const KeyHandler = {
       && (e.screenX !== pointerX || e.screenY !== pointerY);
 
     document.addEventListener('keydown', (e: KeyboardEvent) => {
+      const keys = getPlatformAdapter().keys;
       // webOS reports its cursor appearing or hiding as a key press; neither
       // is the D-pad taking over.
-      if (e.keyCode === K.CURSOR_HIDE) {
+      if (e.keyCode === keys.CURSOR_HIDE) {
         settleEdgeFocus();
         Focus.pointerGone();
         notifyPointerGone();
       }
-      if (e.keyCode === K.CURSOR_SHOW || e.keyCode === K.CURSOR_HIDE) {
-        setCursorHidden(e.keyCode === K.CURSOR_HIDE);
+      if (e.keyCode === keys.CURSOR_SHOW || e.keyCode === keys.CURSOR_HIDE) {
+        setCursorHidden(e.keyCode === keys.CURSOR_HIDE);
         return;
       }
       settleEdgeFocus();

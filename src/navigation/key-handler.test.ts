@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { CONFIG } from '../config';
 import { StorageService } from '../services/storage-service';
+import { detectPlatformAdapter, setPlatformAdapter } from '../platform/platform-adapter';
 import type { Action, NumberEvent } from '../types';
 import { Focus, type FocusScope } from './focus-scope';
 
@@ -1209,5 +1211,27 @@ describe('KeyHandler', () => {
       expect(row('a').classList.contains('focused')).toBe(true);
       expect(row('b').classList.contains('focused')).toBe(false);
     });
+  });
+
+  it('routes Tizen Back (10009) through active PlatformAdapter, including inside text inputs', () => {
+    const tizen = {
+      ...detectPlatformAdapter(),
+      kind: 'tizen' as const,
+      mediaBackend: 'tizen-avplay' as const,
+      keys: { ...CONFIG.KEYS, BACK: 10009 },
+    };
+    setPlatformAdapter(tizen);
+    try {
+      press(10009);
+      expect(handler).toHaveBeenCalledWith('back');
+      handler.mockClear();
+
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      press(10009, input);
+      expect(handler).toHaveBeenCalledWith('back');
+    } finally {
+      setPlatformAdapter(null);
+    }
   });
 });

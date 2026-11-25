@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { AudioOption, HeaderPlayback, ManifestAudio, ManifestClosedCaption, ManifestSubtitle, SubtitleOption } from '../types';
 import { CONFIG } from '../config';
 import { getCachedStreamMime, setCachedStreamMime } from '../services/idb-cache';
@@ -25,7 +26,7 @@ import { parseAudioRenditions } from '../utils/audio-tracks';
 import { FetchTextError, fetchFailureReason, fetchLimitedText } from '../utils/fetch-helper';
 import { getLenientLoaders } from '../utils/hls-stable-loader';
 import { createLogger } from '../utils/logger';
-import { isWebOS, isWebOS4 } from '../utils/platform';
+import { getPlatformAdapter } from '../platform/platform-adapter';
 import {
   hasLunaHeaders,
   hasOnlyUserAgent,
@@ -513,7 +514,7 @@ export class PlayerPipeline {
     // webOS: the TV's hardware HLS/TS decoders beat MSE libraries, so play
     // natively. Explicit extensions and previously verified routes avoid a
     // probe; only a cold ambiguous route pays the bounded classification cost.
-    if (isWebOS()) {
+    if (getPlatformAdapter().mediaBackend === 'webos-native') {
       if (opts?.direct) {
         const mime = containerMime(url);
         log.info('Selected webOS native playback', 'event=playback.path.native',
@@ -789,7 +790,8 @@ export class PlayerPipeline {
       && this.callbacks.headerPlayback() === 'proxy';
     const steps: ChainStep[] = [];
     // Luna mode logs its own skips when the step runs.
-    if (proxy && (needsHeaders || userAgentOnly) && isWebOS() && this.lunaWindowUnsupported()) {
+    if (proxy && (needsHeaders || userAgentOnly)
+        && getPlatformAdapter().capabilities.lunaBus && this.lunaWindowUnsupported()) {
       this.noteLunaSkip(token, headers, 'no_window_latched', userAgentOnly);
     }
     if (!needsHeaders && !(credentials && proxy)) steps.push('video');
@@ -815,7 +817,8 @@ export class PlayerPipeline {
 
   // Luna steps known to fail before they start; lunaHeaders logs the reason.
   private lunaPossible(url: string, extras: Record<string, string> | null): boolean {
-    if (!isWebOS() || this.lunaOff || this.lunaWindowUnsupported() || this.lunaFailed.has(url)
+    if (!getPlatformAdapter().capabilities.lunaBus
+        || this.lunaOff || this.lunaWindowUnsupported() || this.lunaFailed.has(url)
         || this.lunaFellBack.has(url)) return false;
     const mime = streamUrlMime(url);
     if (mime === 'video/mp2t' || mime === 'video/x-flv') return false;
@@ -1243,7 +1246,8 @@ export class PlayerPipeline {
     userAgentOnly = false,
     format: 'hls' | 'dash' = 'hls',
   ): Record<string, string> | null {
-    if (!isWebOS() || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return null;
+    if (!getPlatformAdapter().capabilities.lunaBus
+        || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return null;
     const chain = this.chainFor(token);
     const otherSkip = this.lunaWindowUnsupported() ? 'no_window_latched'
       : this.lunaOff ? 'latched_off'
@@ -1276,7 +1280,7 @@ export class PlayerPipeline {
 
   // Why a channel whose headers need Luna still plays without them.
   private noteLunaSkip(token: number, headers: Record<string, string>, reason: string, userAgentOnly = false): void {
-    if (token === this.lunaSkipToken || !isWebOS()
+    if (token === this.lunaSkipToken || !getPlatformAdapter().capabilities.lunaBus
         || !(userAgentOnly ? hasOnlyUserAgent(headers) : hasLunaHeaders(headers))) return;
     this.lunaSkipToken = token;
     log.info('Luna header playback skipped', 'event=playback.luna.skipped',
@@ -1378,7 +1382,9 @@ export class PlayerPipeline {
     const rule = this.callbacks.qualityRule();
     // UMS takes the bitrate range only at load, so a Video quality that
     // limits the variants holds Luna HLS on its master, as DASH holds on its MPD.
-    if (!dash && hlsRead === undefined && needsTiers(rule, isWebOS4()) && !this.noChoice.has(url)) {
+    if (!dash && hlsRead === undefined
+        && needsTiers(rule, getPlatformAdapter().capabilities.webos4StartBitrateQuirk)
+        && !this.noChoice.has(url)) {
       this.cancelManifest();
       // The outgoing stream must not play or fail under this load while it waits.
       this.detachSource(videoEl);
@@ -1646,7 +1652,8 @@ export class PlayerPipeline {
       this.playNative(url, this.hlsSourceType(mime, rule, known, token, false));
       return;
     }
-    if (!needsTiers(rule, isWebOS4()) || this.noChoice.has(url)) {
+    if (!needsTiers(rule, getPlatformAdapter().capabilities.webos4StartBitrateQuirk)
+        || this.noChoice.has(url)) {
       void this.loadManifest(url, this.manifestSeq, token, 'hls', undefined, undefined, undefined, false, vod);
       this.playNative(url, this.hlsSourceType(mime, rule, [], token));
       return;
@@ -1697,14 +1704,15 @@ export class PlayerPipeline {
   ): BpsOption | null {
     if (rule.kind === 'auto') return null;
     const label = this.callbacks.playbackLabel(token);
-    if (!tiers && needsTiers(rule, isWebOS4())) {
+    const webos4Quirk = getPlatformAdapter().capabilities.webos4StartBitrateQuirk;
+    if (!tiers && needsTiers(rule, webos4Quirk)) {
       if (report) log.warn('Video quality not applied', 'event=playback.quality.skipped', label,
         `rule=${rule.kind}`, `format=${format}`, `path=${path}`, 'reason=manifest');
       return null;
     }
     // webOS 4 starts on the first variant at or above start, so Highest with
     // no known top tier leaves the TV its own start.
-    const bps = rule.kind === 'highest' && !tiers?.length && isWebOS4() ? null : bpsOption(rule, tiers ?? []);
+    const bps = rule.kind === 'highest' && !tiers?.length && webos4Quirk ? null : bpsOption(rule, tiers ?? []);
     if (report) log.info('Video quality applied', 'event=playback.quality.applied', label,
       `rule=${rule.kind}`, `format=${format}`, `path=${path}`, `tiers=${String(tiers?.length ?? 0)}`,
       `start=${String(bps?.start ?? 0)}`, `minimum=${String(bps?.minimum ?? 0)}`,
