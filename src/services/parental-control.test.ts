@@ -216,6 +216,33 @@ describe('ParentalControlService', () => {
     expect(ParentalControlService.sourceApproved('live', 'm2')).toBe(true);
   });
 
+  it('registers only vod and series sources when an Xtream entry is vodOnly', () => {
+    storage.playlists = [
+      {
+        id: 'x-vod',
+        name: 'VOD Portal',
+        url: 'http://host/portal',
+        source: 'xtream',
+        vodOnly: true,
+        xtream: { username: 'u1', password: 'p1' },
+      },
+    ];
+    ParentalControlService.adoptSource('live', 'x-vod', []);
+    expect(ParentalControlService.sourceApproved('live', 'x-vod')).toBe(true);
+    ParentalControlService.adoptSource('vod', 'x-vod', []);
+    expect(ParentalControlService.sourceApproved('vod', 'x-vod')).toBe(true);
+
+    // Reloading approves present sources in currentSourceKeys() when the config lacks approvedSources.
+    const saved = { ...storage.config! } as Partial<ParentalControlConfig>;
+    delete saved.approvedSources;
+    storage.config = saved as ParentalControlConfig;
+    ParentalControlService.reload();
+
+    expect(ParentalControlService.sourceApproved('live', 'x-vod')).toBe(false);
+    expect(ParentalControlService.sourceApproved('vod', 'x-vod')).toBe(true);
+    expect(ParentalControlService.sourceApproved('series', 'x-vod')).toBe(true);
+  });
+
   it('approves the current sources for a config saved without the list', () => {
     const saved = { ...storage.config! } as Partial<ParentalControlConfig>;
     delete saved.approvedSources;

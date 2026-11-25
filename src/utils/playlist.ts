@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { PlaylistEntry } from '../types';
 
 /**
@@ -12,6 +13,12 @@ export function genPlaylistId(): string {
 
 export function isSourceEnabled(source: Pick<PlaylistEntry, 'enabled'>): boolean {
   return source.enabled !== false;
+}
+
+export function isLiveSourceEnabled(
+  source: Pick<PlaylistEntry, 'enabled' | 'vodOnly'>,
+): boolean {
+  return isSourceEnabled(source) && !source.vodOnly;
 }
 
 // How far a playlist load has come, 0..1. A source of unknown size eases

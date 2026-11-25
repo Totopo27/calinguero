@@ -51,7 +51,7 @@ import {
   scheduleCachedPlaylist,
   type CacheRecordRef,
 } from './idb-cache';
-import { isSourceEnabled } from '../utils/playlist';
+import { isLiveSourceEnabled } from '../utils/playlist';
 import { diagnosticStreamUrl } from '../utils/url';
 import {
   filterLiveStreams,
@@ -239,7 +239,7 @@ class PlaylistServiceImpl {
     const playlists = StorageService.getPlaylists();
     this.liveCategoryNotices = this.liveCategoryNotices.filter((notice) => {
       const pl = playlists.find(entry => entry.id === notice.playlistId);
-      if (!pl || pl.source !== 'xtream' || !isSourceEnabled(pl)) return false;
+      if (!pl || pl.source !== 'xtream' || !isLiveSourceEnabled(pl)) return false;
       if (normalizeLiveCategoryFilter(pl.xtream?.liveCategories)?.mode !== 'include') return false;
       const snapshot = StorageService.getLiveCategorySnapshot(pl.id);
       return !!snapshot && snapshot.announcedIds.length > 0;
@@ -290,8 +290,8 @@ class PlaylistServiceImpl {
   }
 
   get allSourcesDisabled(): boolean {
-    const sources = StorageService.getPlaylists();
-    return sources.length > 0 && !sources.some(isSourceEnabled);
+    const sources = StorageService.getPlaylists().filter(source => !source.vodOnly);
+    return sources.length > 0 && !sources.some(isLiveSourceEnabled);
   }
 
   getNextRefreshDelayMs(intervalMs: number): number {
@@ -353,7 +353,7 @@ class PlaylistServiceImpl {
     onProgress: ((progress: PlaylistLoadProgress) => void) | undefined,
     options: PlaylistLoadOptions,
   ): Promise<Channel[]> {
-    const enabledSources = StorageService.getPlaylists().filter(isSourceEnabled);
+    const enabledSources = StorageService.getPlaylists().filter(isLiveSourceEnabled);
     const enabledIds = new Set(enabledSources.map(source => source.id));
     if (!enabledIds.size) {
       this.reset();
@@ -486,7 +486,7 @@ class PlaylistServiceImpl {
   ): Promise<Channel[]> {
     const done = log.time('refresh');
     const cacheToken = playlistCacheToken();
-    const playlists = StorageService.getPlaylists().filter(isSourceEnabled);
+    const playlists = StorageService.getPlaylists().filter(isLiveSourceEnabled);
     if (!playlists.length) {
       log.info('No playlist sources enabled');
       this.reset();
@@ -1334,7 +1334,7 @@ class PlaylistServiceImpl {
     // including a playlist that loaded zero channels (empty/unreachable feed), so
     // it stays visible. Derived from the registry, not the cached channels, so a
     // stale/desynced channel cache can never blank out the tab bar.
-    const configured = StorageService.getPlaylists().filter(isSourceEnabled);
+    const configured = StorageService.getPlaylists().filter(isLiveSourceEnabled);
     this.playlistTabs = configured.map(pl => ({ id: pl.id, name: pl.name || pl.url }));
   }
 

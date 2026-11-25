@@ -21,6 +21,7 @@ export interface CentralCatalogPlaylist {
   source: 'url' | 'xtream';
   url: string;
   revision?: string;
+  vodOnly?: boolean;
   xtream?: {
     username: string;
     password: string;
@@ -102,8 +103,10 @@ export function parseCentralCatalog(raw: unknown): CentralCatalogManifest | null
       if (!validRevision) return null;
       itemRevision = validRevision;
     }
+    if (item.vodOnly !== undefined && typeof item.vodOnly !== 'boolean') return null;
 
     if (item.source === 'url') {
+      if (item.vodOnly) return null;
       const url = sanitizeHttpUrl(item.url);
       if (!url) return null;
       playlists.push({
@@ -130,6 +133,7 @@ export function parseCentralCatalog(raw: unknown): CentralCatalogManifest | null
         source: 'xtream',
         url: normalizeXtreamBaseUrl(base),
         ...(itemRevision ? { revision: itemRevision } : {}),
+        ...(item.vodOnly ? { vodOnly: true } : {}),
         xtream: {
           username,
           password,
@@ -203,6 +207,7 @@ function toManagedPlaylist(
     url: item.url,
     source: item.source,
     ...(item.xtream ? { xtream: { ...item.xtream } } : {}),
+    ...(item.vodOnly ? { vodOnly: true } : {}),
     ...(previous?.enabled === false ? { enabled: false } : {}),
     managed: true,
     catalogRevision: item.revision ?? revision,

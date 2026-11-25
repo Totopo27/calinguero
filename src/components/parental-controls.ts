@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   CatalogCategoryTarget,
@@ -378,11 +379,13 @@ export class ParentalControls {
   private buildSources(): SourceEntry[] {
     const sources: SourceEntry[] = [];
     for (const account of StorageService.getPlaylists()) {
-      sources.push({
-        key: `live:${account.id}`,
-        kind: 'live',
-        account,
-      });
+      if (!account.vodOnly) {
+        sources.push({
+          key: `live:${account.id}`,
+          kind: 'live',
+          account,
+        });
+      }
       if (account.source === 'xtream') {
         sources.push({ key: `vod:${account.id}`, kind: 'vod', account });
         sources.push({ key: `series:${account.id}`, kind: 'series', account });

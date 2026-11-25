@@ -36,6 +36,7 @@ Optional zero-config provisioning for centrally curated M3U live lists, EPG feed
 
 - **`revision`**: Required non-empty top-level string (`<= 128` chars, no control characters). Each `playlists[]` item may also specify an optional per-playlist `revision` (`<= 128` chars, no control characters), which overrides the top-level `revision` when setting `PlaylistEntry.catalogRevision`. Changing `catalogRevision` triggers `ParentalControlService.reviewChangedSources()` only on the modified source even when its playlist URL stays fixed.
 - **`playlists`**: Supports `'url'` and `'xtream'` sources with `http://` or `https://` URLs and unique `id` values. Reconciles additions, updates, and removals of `managed: true` entries while keeping user-added lists, uploads, and local `enabled: false` toggles on surviving managed IDs intact.
+- **`vodOnly` (Xtream only)**: Optional boolean on `source: "xtream"` items (`true` powers **Movies** and **Series** only and skips loading raw Xtream Live TV channels so curated M3U lists own Live TV without duplicates; invalid/non-boolean values or `vodOnly: true` on `'url'` entries are rejected).
 - **`epgSources`**: Optional array of `http://` or `https://` XMLTV URLs with optional `playlistIds` scoping. Duplicate URLs already configured manually by the user keep user ownership.
 
 ## Dynamic Additions, Removals, and ID Stability

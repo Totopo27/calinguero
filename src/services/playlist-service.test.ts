@@ -2802,4 +2802,38 @@ describe('PlaylistService progressive load', () => {
       errSpy.mockRestore();
     }
   });
+
+  it('skips vodOnly Xtream entries during live refresh and tab construction', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'live-1', name: 'Live', url: 'http://host/live.m3u', source: 'url' },
+      {
+        id: 'vod-1',
+        name: 'VOD Only',
+        url: 'http://host/portal',
+        source: 'xtream',
+        vodOnly: true,
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+    ]);
+    fetchTextMock.mockResolvedValueOnce('#EXTM3U\n#EXTINF:-1,Alpha\nhttp://host/1.ts\n');
+
+    await PlaylistService.refresh();
+
+    expect(fetchTextMock).toHaveBeenCalledTimes(1);
+    expect(PlaylistService.playlistTabs).toEqual([{ id: 'live-1', name: 'Live' }]);
+    expect(PlaylistService.channels).toHaveLength(1);
+    expect(PlaylistService.allSourcesDisabled).toBe(false);
+
+    storageMock.getPlaylists.mockReturnValue([
+      {
+        id: 'vod-1',
+        name: 'VOD Only',
+        url: 'http://host/portal',
+        source: 'xtream',
+        vodOnly: true,
+        xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+      },
+    ]);
+    expect(PlaylistService.allSourcesDisabled).toBe(false);
+  });
 });

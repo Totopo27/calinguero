@@ -89,7 +89,7 @@ function sourceContentChange(previous: PlaylistEntry, next: PlaylistEntry): stri
 function currentSourceKeys(): string[] {
   const keys: string[] = [];
   for (const entry of StorageService.getPlaylists()) {
-    keys.push(sourceKey('live', entry.id));
+    if (!entry.vodOnly) keys.push(sourceKey('live', entry.id));
     if (entry.source === 'xtream') keys.push(sourceKey('vod', entry.id), sourceKey('series', entry.id));
   }
   return keys;

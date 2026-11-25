@@ -71,6 +71,7 @@ describe('parseCentralCatalog', () => {
           source: 'xtream',
           url: 'http://host:8080/',
           revision: 'vod-r3',
+          vodOnly: true,
           xtream: { username: 'u1', password: 'p1', liveOutput: 'm3u8' },
         },
       ],
@@ -96,6 +97,7 @@ describe('parseCentralCatalog', () => {
           source: 'xtream',
           url: 'http://host:8080',
           revision: 'vod-r3',
+          vodOnly: true,
           xtream: { username: 'u1', password: 'p1', liveOutput: 'm3u8' },
         },
       ],
@@ -150,6 +152,21 @@ describe('parseCentralCatalog', () => {
     expect(parseCentralCatalog({
       ...base,
       epgSources: [{ url: 'javascript:alert(1)' }],
+    })).toBeNull();
+    expect(parseCentralCatalog({
+      ...base,
+      playlists: [{ id: 'c1', name: 'Live', source: 'url', url: 'http://host/a.m3u', vodOnly: true }],
+    })).toBeNull();
+    expect(parseCentralCatalog({
+      ...base,
+      playlists: [{
+        id: 'x1',
+        name: 'VOD',
+        source: 'xtream',
+        url: 'http://host/x',
+        vodOnly: 'yes',
+        xtream: { username: 'u1', password: 'p1' },
+      }],
     })).toBeNull();
   });
 });
@@ -208,6 +225,7 @@ describe('CatalogBootstrapService.sync', () => {
           name: 'Central VOD',
           source: 'xtream',
           url: 'http://host/portal',
+          vodOnly: true,
           xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
         },
       ],
@@ -240,6 +258,7 @@ describe('CatalogBootstrapService.sync', () => {
         source: 'xtream',
         url: 'http://host/portal',
         xtream: { username: 'u1', password: 'p1', liveOutput: 'ts' },
+        vodOnly: true,
         managed: true,
         catalogRevision: 'rev-1',
       },

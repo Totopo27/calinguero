@@ -223,6 +223,8 @@ export interface PlaylistEntry {
   managed?: boolean;
   /** Central catalog revision string attached when provisioned by CatalogBootstrapService. */
   catalogRevision?: string;
+  /** When true on an Xtream entry, power Movies/Series only and skip Live channel loading. */
+  vodOnly?: boolean;
   /** Credentials and live output preference for an 'xtream' entry. */
   xtream?: {
     username: string;
