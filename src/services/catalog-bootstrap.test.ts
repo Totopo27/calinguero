@@ -53,17 +53,24 @@ function jsonResponse(data: unknown): Response {
 }
 
 describe('parseCentralCatalog', () => {
-  it('parses a valid v1 manifest with playlists and EPG sources', () => {
+  it('parses a valid v1 manifest with playlists, optional per-playlist revision, and EPG sources', () => {
     const parsed = parseCentralCatalog({
       version: 1,
       revision: 'rev-1',
       playlists: [
-        { id: 'c-live', name: 'Central Live', source: 'url', url: 'https://host/live.m3u' },
+        {
+          id: 'c-live',
+          name: 'Central Live',
+          source: 'url',
+          url: 'https://host/live.m3u',
+          revision: 'live-r1',
+        },
         {
           id: 'c-vod',
           name: 'Central VOD',
           source: 'xtream',
           url: 'http://host:8080/',
+          revision: 'vod-r3',
           xtream: { username: 'u1', password: 'p1', liveOutput: 'm3u8' },
         },
       ],
@@ -76,12 +83,19 @@ describe('parseCentralCatalog', () => {
       version: 1,
       revision: 'rev-1',
       playlists: [
-        { id: 'c-live', name: 'Central Live', source: 'url', url: 'https://host/live.m3u' },
+        {
+          id: 'c-live',
+          name: 'Central Live',
+          source: 'url',
+          url: 'https://host/live.m3u',
+          revision: 'live-r1',
+        },
         {
           id: 'c-vod',
           name: 'Central VOD',
           source: 'xtream',
           url: 'http://host:8080',
+          revision: 'vod-r3',
           xtream: { username: 'u1', password: 'p1', liveOutput: 'm3u8' },
         },
       ],
@@ -102,6 +116,18 @@ describe('parseCentralCatalog', () => {
     expect(parseCentralCatalog({ ...base, revision: '' })).toBeNull();
     expect(parseCentralCatalog({ ...base, revision: 'a\x00b' })).toBeNull();
     expect(parseCentralCatalog({ ...base, revision: 'r'.repeat(129) })).toBeNull();
+    expect(parseCentralCatalog({
+      ...base,
+      playlists: [{ id: 'c1', name: 'Live', source: 'url', url: 'http://host/a.m3u', revision: '' }],
+    })).toBeNull();
+    expect(parseCentralCatalog({
+      ...base,
+      playlists: [{ id: 'c1', name: 'Live', source: 'url', url: 'http://host/a.m3u', revision: 'bad\nid' }],
+    })).toBeNull();
+    expect(parseCentralCatalog({
+      ...base,
+      playlists: [{ id: 'c1', name: 'Live', source: 'url', url: 'http://host/a.m3u', revision: 'r'.repeat(129) }],
+    })).toBeNull();
     expect(parseCentralCatalog({
       ...base,
       playlists: [{ id: 'c1', name: 'Bad', source: 'url', url: 'file:///etc/passwd' }],
@@ -321,5 +347,36 @@ describe('CatalogBootstrapService.sync', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('prefers per-playlist revision over manifest revision when computing catalogRevision', async () => {
+    localStorage.setItem(CONFIG.STORAGE_KEYS.CATALOG_URL, 'https://host/catalog.json');
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({
+      version: 1,
+      revision: 'rev-1',
+      playlists: [
+        { id: 'm1', name: 'One', source: 'url', url: 'https://host/1.m3u', revision: 'm1-r1' },
+        { id: 'm2', name: 'Two', source: 'url', url: 'https://host/2.m3u', revision: 'm2-r1' },
+        { id: 'm3', name: 'Three', source: 'url', url: 'https://host/3.m3u' },
+      ],
+    }));
+    await CatalogBootstrapService.sync();
+
+    fetchWithTimeoutMock.mockResolvedValueOnce(jsonResponse({
+      version: 1,
+      revision: 'rev-2',
+      playlists: [
+        { id: 'm1', name: 'One', source: 'url', url: 'https://host/1.m3u', revision: 'm1-r2' },
+        { id: 'm2', name: 'Two', source: 'url', url: 'https://host/2.m3u', revision: 'm2-r1' },
+        { id: 'm3', name: 'Three', source: 'url', url: 'https://host/3.m3u' },
+      ],
+    }));
+    await CatalogBootstrapService.sync();
+
+    expect(storageMock.playlists.map(p => ({ id: p.id, catalogRevision: p.catalogRevision }))).toEqual([
+      { id: 'm1', catalogRevision: 'm1-r2' },
+      { id: 'm2', catalogRevision: 'm2-r1' },
+      { id: 'm3', catalogRevision: 'rev-2' },
+    ]);
   });
 });

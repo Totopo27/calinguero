@@ -7,7 +7,7 @@ import { PlaylistService } from './services/playlist-service';
 import { EpgService } from './services/epg-service';
 import { ChannelHealthService } from './services/channel-health';
 import { StorageService } from './services/storage-service';
-import { CatalogBootstrapService } from './services/catalog-bootstrap';
+import { CatalogBootstrapService, resolveCatalogUrl } from './services/catalog-bootstrap';
 import {
   clearAllCachedData,
   clearCachedCatalog,
@@ -828,8 +828,8 @@ class App {
 
   private schedulePlaylistRefresh(force = false, delayOverride?: number): void {
     const intervalMs = StorageService.getPlaylistRefreshIntervalMs();
-    const shouldRun = intervalMs !== null
-      && StorageService.getPlaylists().some(isSourceEnabled);
+    const hasEnabled = StorageService.getPlaylists().some(isSourceEnabled);
+    const shouldRun = intervalMs !== null && (hasEnabled || resolveCatalogUrl() !== null);
     if (!force
       && this.playlistRefreshIntervalMs === intervalMs
       && ((shouldRun && this.playlistRefreshTimer !== null)
@@ -842,7 +842,8 @@ class App {
     }
     this.playlistRefreshIntervalMs = intervalMs;
     if (!shouldRun || intervalMs === null) return;
-    const delayMs = delayOverride ?? PlaylistService.getNextRefreshDelayMs(intervalMs);
+    const delayMs = delayOverride
+      ?? (hasEnabled ? PlaylistService.getNextRefreshDelayMs(intervalMs) : intervalMs);
     this.playlistRefreshTimer = setTimeout(() => {
       this.playlistRefreshTimer = null;
       // A running loadData() replaces the channels and reschedules when done.
@@ -872,35 +873,72 @@ class App {
 
   private async refreshPlaylistInBackground(): Promise<void> {
     try {
-      if (!StorageService.getPlaylists().some(isSourceEnabled)) return;
-      await PlaylistService.refresh(undefined, { preserveOnFailure: true });
-      this.player.syncCurrentIndex();
-      await ChannelHealthService.initialize();
+      const prevXtream = StorageService.getPlaylists().filter(
+        (playlist) => playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist),
+      );
+      const prevAccountId = this.activeXtreamAccount()?.id ?? null;
+      const syncResult = await CatalogBootstrapService.sync();
+      const playlists = StorageService.getPlaylists();
+      const enabledPlaylists = playlists.filter(isSourceEnabled);
+      const xtreamAccounts = enabledPlaylists.filter(
+        (playlist) => playlist.source === 'xtream' && playlist.xtream,
+      );
+      const nextAccount = this.activeXtreamAccount();
+      const catalogChanged = syncResult.status === 'updated';
+      const xtreamChanged = JSON.stringify(prevXtream) !== JSON.stringify(xtreamAccounts);
 
-      const epgSources = this.epgSources();
-      if (epgSources.length) {
-        await EpgService.load(
-          epgSources,
-          PlaylistService.getEpgEligibleChannels(),
-          () => this.refreshEpgDependentViews(),
-        );
-        await EpgService.refresh(() => this.refreshEpgDependentViews());
+      if (!enabledPlaylists.length && !catalogChanged) return;
+
+      if (xtreamChanged) {
+        await clearCachedCatalog();
+        this.search.invalidateCatalog();
+      }
+      if (!enabledPlaylists.length) {
+        PlaylistService.reset();
+        EpgService.reset();
+        this.player.syncCurrentIndex();
         this.refreshEpgDependentViews();
       } else {
-        EpgService.reset();
-        this.refreshEpgDependentViews();
+        await PlaylistService.refresh(undefined, { preserveOnFailure: true });
+        this.player.syncCurrentIndex();
+        await ChannelHealthService.initialize();
+
+        const epgSources = this.epgSources();
+        if (epgSources.length) {
+          await EpgService.load(
+            epgSources,
+            PlaylistService.getEpgEligibleChannels(),
+            () => this.refreshEpgDependentViews(),
+          );
+          await EpgService.refresh(() => this.refreshEpgDependentViews());
+          this.refreshEpgDependentViews();
+        } else {
+          EpgService.reset();
+          this.refreshEpgDependentViews();
+        }
       }
       this.scheduleEpgRefresh(true);
 
-      const playlists = StorageService.getPlaylists();
-      const xtreamAccounts = playlists
-        .filter((playlist) =>
-          playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist));
       this.tabBar.setSections(xtreamAccounts.length > 0);
-      this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
+      this.tabBar.setAccounts(xtreamAccounts, nextAccount?.id ?? '');
+      const current = this.viewStack[this.viewStack.length - 1];
+      if (current === 'movies' || current === 'series') {
+        if (!nextAccount) {
+          this.movies.deactivate();
+          this.series.deactivate();
+          this.showView('channels');
+        } else if (nextAccount.id !== prevAccountId || xtreamChanged) {
+          this.reopenAccountSection(nextAccount);
+        }
+      }
       this.channelList.render();
       this.sidebar.refresh();
       this.livePreview?.refresh();
+      void this.search.refreshChannels();
+      this.scanReminders();
+      ReminderService.reschedulePending();
+      if (this.isCurrentView('reminders')) this.reminderManager.refresh();
+      else if (this.isCurrentView('parental-controls')) this.parentalControls.refreshChannels();
       this.showLiveCategoryNotices();
     } catch (err) {
       log.error('Automatic playlist refresh failed:', err);
@@ -948,6 +986,7 @@ class App {
         this.settings.render();
         this.showView('settings');
         showToast(t('app.welcome'));
+        this.schedulePlaylistRefresh(true, StorageService.getPlaylistRefreshIntervalMs() ?? undefined);
         return;
       }
 
@@ -2036,6 +2075,7 @@ class App {
       void SetupClient.publishState();
     }
     if (action === 'reload') {
+      await CatalogBootstrapService.sync();
       this.search.invalidateCatalog();
       await Promise.all([clearCachedPlaylist(), clearCachedCatalog()]);
       this.showView('channels');

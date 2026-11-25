@@ -20,6 +20,7 @@ export interface CentralCatalogPlaylist {
   name: string;
   source: 'url' | 'xtream';
   url: string;
+  revision?: string;
   xtream?: {
     username: string;
     password: string;
@@ -95,10 +96,23 @@ export function parseCentralCatalog(raw: unknown): CentralCatalogManifest | null
     if (!id || !name || seenIds.has(id)) return null;
     seenIds.add(id);
 
+    let itemRevision: string | undefined;
+    if (item.revision !== undefined) {
+      const validRevision = sanitizeShortToken(item.revision);
+      if (!validRevision) return null;
+      itemRevision = validRevision;
+    }
+
     if (item.source === 'url') {
       const url = sanitizeHttpUrl(item.url);
       if (!url) return null;
-      playlists.push({ id, name, source: 'url', url });
+      playlists.push({
+        id,
+        name,
+        source: 'url',
+        url,
+        ...(itemRevision ? { revision: itemRevision } : {}),
+      });
       continue;
     }
 
@@ -115,6 +129,7 @@ export function parseCentralCatalog(raw: unknown): CentralCatalogManifest | null
         name,
         source: 'xtream',
         url: normalizeXtreamBaseUrl(base),
+        ...(itemRevision ? { revision: itemRevision } : {}),
         xtream: {
           username,
           password,
@@ -190,7 +205,7 @@ function toManagedPlaylist(
     ...(item.xtream ? { xtream: { ...item.xtream } } : {}),
     ...(previous?.enabled === false ? { enabled: false } : {}),
     managed: true,
-    catalogRevision: revision,
+    catalogRevision: item.revision ?? revision,
   };
   return entry;
 }

@@ -184,6 +184,38 @@ describe('ParentalControlService', () => {
     expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(false);
   });
 
+  it('revokes approval only for the managed source whose per-list catalogRevision changed', () => {
+    const m1 = {
+      id: 'm1',
+      name: 'Central One',
+      url: 'http://host/m1.m3u',
+      source: 'url' as const,
+      managed: true,
+      catalogRevision: 'm1-r1',
+    };
+    const m2 = {
+      id: 'm2',
+      name: 'Central Two',
+      url: 'http://host/m2.m3u',
+      source: 'url' as const,
+      managed: true,
+      catalogRevision: 'm2-r1',
+    };
+    storage.playlists = [...sources, m1, m2];
+    ParentalControlService.adoptSource('live', 'm1', []);
+    ParentalControlService.adoptSource('live', 'm2', []);
+    expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(true);
+    expect(ParentalControlService.sourceApproved('live', 'm2')).toBe(true);
+
+    ParentalControlService.reviewChangedSources(storage.playlists, [
+      ...sources,
+      { ...m1, catalogRevision: 'm1-r2' },
+      { ...m2, catalogRevision: 'm2-r1' },
+    ]);
+    expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(false);
+    expect(ParentalControlService.sourceApproved('live', 'm2')).toBe(true);
+  });
+
   it('approves the current sources for a config saved without the list', () => {
     const saved = { ...storage.config! } as Partial<ParentalControlConfig>;
     delete saved.approvedSources;
