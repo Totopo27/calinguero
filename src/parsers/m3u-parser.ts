@@ -592,6 +592,7 @@ const CATCHUP_STRING_KEYS = ['catchup', 'catchupSource'] as const;
 // Every name hasOwnCatchupMarker reads contains one of these.
 const OWN_CATCHUP_NAME = /catchup|tvg-rec|timeshift/i;
 const OPTIONAL_CHANNEL_STRING_KEYS = [
+  'canonicalId',
   'sourceName',
   'sourceGroup',
   'groupKey',
@@ -800,6 +801,8 @@ function parseExtInf(body: string, catchup: CatchupContext | null = null): Chann
     attrs['tvg-name'] || displayName || attrs['tvg-id'] || 'Unknown',
   );
   channel.id = attrs['tvg-id'] || '';
+  const canonicalId = sanitizeCanonicalId(attrs['calinguero-id'] || '');
+  if (canonicalId) channel.canonicalId = canonicalId;
   channel.logo = sanitizeHttpUrl(attrs['tvg-logo'] || attrs.logo || '');
   if (catchup) applyCatchupAttributes(channel, attrs, catchup);
   else applyCatchupAttributes(channel, attrs, { defaults: null, inherit: false, origin: 'none' });
@@ -1089,6 +1092,7 @@ function preserveUnknownAttributes(
 
 function isKnownAttribute(key: string): boolean {
   switch (key) {
+    case 'calinguero-id':
     case 'tvg-id':
     case 'tvg-name':
     case 'tvg-logo':
@@ -1357,6 +1361,14 @@ function nameFromUrl(url: string): string {
 
 const EXPLICIT_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const ALLOWED_STREAM_SCHEME = /^(?:https?|rtsps?|rtp|udp|rtmps?|mms[ht]?):$/i;
+const MAX_CANONICAL_ID_LENGTH = 128;
+
+function sanitizeCanonicalId(value: string): string {
+  if (/[\0-\x1f\x7f]/.test(value)) return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_CANONICAL_ID_LENGTH) return '';
+  return trimmed;
+}
 
 function isAllowedStreamLocation(value: string): boolean {
   if (/[\0-\x1f\x7f]/.test(value)) return false;

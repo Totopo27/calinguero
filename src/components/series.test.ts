@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type {
   PlaylistEntry, ResumeEntry, ResumeKind, VodQueueItem, WatchlistEntry, WatchlistKind,
@@ -863,6 +864,37 @@ describe('Series detail', () => {
     view.handleAction('select');
     expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
       itemId: 'e2', resumeSecs: 450, url: 'http://host:8080/series/u/p/e2.mkv',
+    }));
+  });
+
+  it('hydrates stripped episodeQueue URLs when resuming from Continue Watching', async () => {
+    const strippedNext: VodQueueItem = {
+      url: '', title: 'Series One — S2E2', poster: '',
+      accountId: 'x1', itemId: 'e3', kind: 'episode', ext: 'mkv', subtitles: [],
+    };
+    catalogMock.loadSeriesInfo.mockReturnValue(new Promise(() => undefined));
+    storageMock.getResumeList.mockReturnValue([ownedResume('e2', 'Series One — S2E1 — Episode Two', 2, {
+      episodeQueue: [strippedNext],
+      watchlistOwner: { kind: 'series', itemId: 's1', name: 'Series One', poster: 'http://host/series.jpg' },
+    })]);
+    storageMock.getResume.mockImplementation((_a: string, _k: string, id: string) =>
+      id === 'e2' ? ownedResume('e2', '', 2) : null);
+    const { view, handlers } = await openWith([{ id: '1', name: 'Cat A' }], []);
+    const tile = container.querySelector('[data-rail-key="continue"] .catalog-tile') as HTMLElement;
+    tile.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true }));
+    view.handleAction('select');
+    await Promise.resolve();
+
+    view.handleAction('select');
+    expect(handlers.onPlayVod).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: 'e2',
+      episodeQueue: [
+        expect.objectContaining({
+          itemId: 'e3',
+          ext: 'mkv',
+          url: 'http://host:8080/series/u/p/e3.mkv',
+        }),
+      ],
     }));
   });
 

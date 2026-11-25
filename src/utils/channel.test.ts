@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect } from 'vitest';
 import type { Channel } from '../types';
 import {
@@ -16,6 +17,19 @@ const ch = (url: string): Channel => ({
 describe('channelKey', () => {
   it('is deterministic for the same URL', () => {
     expect(channelKey(ch('http://host/a'))).toBe(channelKey(ch('http://host/a')));
+  });
+
+  it('prefers canonicalId over stream URL and updates when canonicalId changes', () => {
+    const urlKey = channelKey(ch('http://host/a'));
+    const one: Channel = { ...ch('http://host/a'), canonicalId: 'ch/1' };
+    const swapped: Channel = { ...ch('http://other/live/u2/p2/99.ts'), canonicalId: 'ch/1' };
+
+    expect(channelKey(one)).toBe('cid:ch%2F1');
+    expect(channelKey(one)).toBe(channelKey(swapped));
+    expect(channelKey(one)).not.toBe(urlKey);
+
+    one.canonicalId = 'ch/2';
+    expect(channelKey(one)).toBe('cid:ch%2F2');
   });
 
   it('ignores rotating authentication parameters', () => {

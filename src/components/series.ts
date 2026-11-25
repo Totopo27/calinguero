@@ -1,10 +1,11 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { syncTabBarOverArt } from './tab-bar';
 import type { Action, PlaylistEntry, SeriesCategory, SeriesItem, SeriesInfo, Episode, ResumeEntry, ResumeKind, SearchMeta, VodPlayback, VodQueueItem, WatchlistEntry } from '../types';
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
 import { loadSeriesCategories, loadSeries, loadSeriesInfo } from '../services/xtream-catalog';
-import { xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
+import { resolveVodQueueItemUrl, xtreamEpisodeUrl, type XtreamCredentials } from '../utils/xtream-url';
 import { CatalogView, type CatalogHandlers, type CollectionKind, type CollectionEntry } from './catalog-view';
 import { CHECK_ICON, HIDE_ICON, PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
 import { showToast } from './toast';
@@ -405,13 +406,15 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
 
   private episodePlayback(series: SeriesItem, ep: Episode): VodQueueItem {
     const a = this.account!;
+    const ext = ep.containerExtension || 'mp4';
     return {
-      url: xtreamEpisodeUrl(this.creds(), ep.id, ep.containerExtension || 'mp4'),
+      url: xtreamEpisodeUrl(this.creds(), ep.id, ext),
       title: this.episodeLabel(series, ep),
       poster: ep.poster || series.poster,
       accountId: a.id,
       itemId: ep.id,
       kind: 'episode',
+      ext,
       categoryId: series.categoryId,
       parentalItemId: series.seriesId,
       subtitles: ep.subtitles,
@@ -488,6 +491,17 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
     const a = this.account;
     const r = this.resume.find((e) => e.itemId === episodeId);
     if (!a || !r) return;
+    const storedPlaylists = typeof StorageService.getPlaylists === 'function'
+      ? StorageService.getPlaylists()
+      : [];
+    const playlists = [a, ...storedPlaylists.filter(pl => pl.id !== a.id)];
+    const episodeQueue = r.episodeQueue
+      ?.map((item) => {
+        if (item.url) return item;
+        const url = resolveVodQueueItemUrl(item, playlists);
+        return url ? { ...item, url } : null;
+      })
+      .filter((item): item is VodQueueItem => item !== null);
     this.playSeriesEpisode({
       url: xtreamEpisodeUrl(this.creds(), r.itemId, r.ext || 'mp4'),
       title: r.name,
@@ -501,7 +515,7 @@ export class Series extends CatalogView<SeriesCategory, SeriesItem> {
       holdsSeriesPlace: !!r.watchlistOwner,
       searchMeta: resumeSearchMeta(r),
       subtitles: [],
-      episodeQueue: r.episodeQueue,
+      episodeQueue,
       watchlistOwner: r.watchlistOwner,
     });
   }

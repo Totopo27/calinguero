@@ -1057,6 +1057,30 @@ describe('parseM3U', () => {
     expect(result.channels[0].catchupSource).toBe('');
     expect(result.issues.filter(i => i.code === 'unsupported-scheme')).toHaveLength(2);
   });
+
+  it('parses calinguero-id onto Channel.canonicalId and rejects malformed values', () => {
+    const overlong = 'c'.repeat(129);
+    const m3u = [
+      '#EXTM3U',
+      '#EXTINF:-1 calinguero-id=" ch-canonical-1 ",Channel Alpha',
+      'http://host/alpha.m3u8',
+      '#EXTINF:-1 calinguero-id="bad\x01id",Channel Control',
+      'http://host/beta.m3u8',
+      `#EXTINF:-1 calinguero-id="${overlong}",Channel Long`,
+      'http://host/gamma.m3u8',
+      '#EXTINF:-1 calinguero-id="   ",Channel Blank',
+      'http://host/delta.m3u8',
+    ].join('\n');
+
+    const result = parseM3U(m3u);
+    expect(result.channels).toHaveLength(4);
+    expect(result.channels[0].canonicalId).toBe('ch-canonical-1');
+    expect(result.channels[0].sourceAttributes).toBeUndefined();
+    expect(result.channels[1].canonicalId).toBeUndefined();
+    expect(result.channels[1].sourceAttributes).toBeUndefined();
+    expect(result.channels[2].canonicalId).toBeUndefined();
+    expect(result.channels[3].canonicalId).toBeUndefined();
+  });
 });
 
 function encodeUtf16(value: string, littleEndian: boolean): Uint8Array {

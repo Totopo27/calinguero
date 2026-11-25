@@ -1,9 +1,10 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 // Pure URL derivation for an Xtream Codes / XUI.one portal. A single set of
 // credentials (base portal URL + username + password) yields the get.php
 // playlist, xmltv.php EPG, and player_api.php JSON endpoints. Kept dependency-
 // free and unit-tested so the stateful client/service layers just compose it.
 
-import type { XtreamCatchupSource } from '../types';
+import type { PlaylistEntry, VodQueueItem, XtreamCatchupSource } from '../types';
 
 export interface XtreamCredentials {
   /** Portal base, e.g. `http://host:8080`. Normalized lazily by each builder. */
@@ -209,6 +210,45 @@ export function xtreamVodUrl(c: XtreamCredentials, streamId: string, ext: string
 export function xtreamEpisodeUrl(c: XtreamCredentials, episodeId: string, ext: string): string {
   const base = normalizeXtreamBaseUrl(c.baseUrl);
   return `${base}/series/${encodeURIComponent(c.username)}/${encodeURIComponent(c.password)}/${episodeId}.${ext}`;
+}
+
+/** True when a URL follows the Xtream `/series/{user}/{pass}/{id}[.ext]` shape. */
+export function isXtreamSeriesStreamUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].toLowerCase() === 'series') {
+        return parts.length - i === 4;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Hydrate a queued episode URL from its stored Xtream account when stripped on disk. */
+export function resolveVodQueueItemUrl(
+  item: VodQueueItem,
+  playlists: readonly PlaylistEntry[],
+): string {
+  if (item.url) return item.url;
+  if (item.kind !== 'episode') return '';
+  const account = playlists.find(
+    pl => pl.id === item.accountId && pl.source === 'xtream' && pl.xtream,
+  );
+  if (!account || !account.xtream) return '';
+  return xtreamEpisodeUrl(
+    {
+      baseUrl: account.url,
+      username: account.xtream.username,
+      password: account.xtream.password,
+    },
+    item.itemId,
+    item.ext || 'mp4',
+  );
 }
 
 /** Xtream archive URL template. Duration is in minutes; start is provider-local

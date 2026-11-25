@@ -1,6 +1,9 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect } from 'vitest';
 import {
+  isXtreamSeriesStreamUrl,
   normalizeXtreamBaseUrl,
+  resolveVodQueueItemUrl,
   xtreamPlaylistUrl,
   xtreamEpgUrl,
   xtreamPlayerApi,
@@ -352,5 +355,34 @@ describe('simpleUrlPathname', () => {
       expect(fast).toBe(new URL(url).pathname);
     }
     expect(simple).toBeGreaterThan(1000);
+  });
+
+  it('identifies Xtream series URLs and resolves stripped episodeQueue item URLs lazily', () => {
+    expect(isXtreamSeriesStreamUrl('http://host:8080/series/u1/p1/e2.mkv')).toBe(true);
+    expect(isXtreamSeriesStreamUrl('https://host/base/series/u1/p1/e2')).toBe(true);
+    expect(isXtreamSeriesStreamUrl('http://host/series/e2.mp4')).toBe(false);
+    expect(isXtreamSeriesStreamUrl('http://host/movie/u1/p1/m1.mp4')).toBe(false);
+
+    const playlists = [{
+      id: 'x1',
+      name: 'Account',
+      url: 'http://host:8080',
+      source: 'xtream' as const,
+      xtream: { username: 'u1', password: 'p1' },
+    }];
+    expect(resolveVodQueueItemUrl({
+      url: '', title: 'E2', poster: '', accountId: 'x1', itemId: 'e2',
+      kind: 'episode', ext: 'mkv', subtitles: [],
+    }, playlists)).toBe('http://host:8080/series/u1/p1/e2.mkv');
+
+    expect(resolveVodQueueItemUrl({
+      url: 'http://host/custom/e2.mp4', title: 'E2', poster: '', accountId: 'x1', itemId: 'e2',
+      kind: 'episode', ext: 'mp4', subtitles: [],
+    }, playlists)).toBe('http://host/custom/e2.mp4');
+
+    expect(resolveVodQueueItemUrl({
+      url: '', title: 'E2', poster: '', accountId: 'missing', itemId: 'e2',
+      kind: 'episode', ext: 'mkv', subtitles: [],
+    }, playlists)).toBe('');
   });
 });

@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   CatalogCategoryTarget,
   CatalogItemTarget,
@@ -71,6 +72,11 @@ function parentSourceKey(parent: LiveGroupTarget | CatalogCategoryTarget): strin
 // revisions were recorded.
 function sourceContentChange(previous: PlaylistEntry, next: PlaylistEntry): string | null {
   if ((previous.source ?? 'url') !== (next.source ?? 'url')) return 'type';
+  if (previous.catalogRevision !== undefined
+      && next.catalogRevision !== undefined
+      && previous.catalogRevision !== next.catalogRevision) {
+    return 'revision';
+  }
   if (next.source === 'upload') {
     return previous.revision !== undefined && previous.revision !== next.revision
       ? 'revision'

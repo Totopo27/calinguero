@@ -1,9 +1,11 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatalogMark, CatalogMarkKind, CatchupProgressEntry, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, VodQueueItem, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
-import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
+import { extFromUrl } from '../utils/url';
+import { isXtreamSeriesStreamUrl, normalizeXtreamBaseUrl } from '../utils/xtream-url';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
 import { isAspectRatio, type AspectRatio } from './aspect-ratio';
@@ -87,7 +89,7 @@ function sanitizeManualEpgSources(value: unknown[]): ManualEpgSource[] {
   const sources: ManualEpgSource[] = [];
   for (const item of value) {
     if (!item || typeof item !== 'object') continue;
-    const candidate = item as { url?: unknown; playlistIds?: unknown };
+    const candidate = item as { url?: unknown; playlistIds?: unknown; managed?: unknown };
     if (typeof candidate.url !== 'string') continue;
     const url = candidate.url.trim();
     if (!url) continue;
@@ -95,18 +97,53 @@ function sanitizeManualEpgSources(value: unknown[]): ManualEpgSource[] {
       ? candidate.playlistIds.filter((id): id is string =>
           typeof id === 'string' && id !== '')
       : [];
+    const managed = candidate.managed === true;
     const existing = sources.find(source => source.url === url);
     if (!existing) {
-      sources.push({ url, playlistIds: Array.from(new Set(playlistIds)) });
-    } else if (!existing.playlistIds.length || !playlistIds.length) {
-      existing.playlistIds = [];
+      sources.push({
+        url,
+        playlistIds: Array.from(new Set(playlistIds)),
+        ...(managed ? { managed: true } : {}),
+      });
     } else {
-      for (const id of playlistIds) {
-        if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+      if (!managed) delete existing.managed;
+      if (!existing.playlistIds.length || !playlistIds.length) {
+        existing.playlistIds = [];
+      } else {
+        for (const id of playlistIds) {
+          if (!existing.playlistIds.includes(id)) existing.playlistIds.push(id);
+        }
       }
     }
   }
   return sources;
+}
+
+function sanitizeEpisodeQueueItem(
+  item: VodQueueItem,
+  playlists: readonly PlaylistEntry[],
+): VodQueueItem {
+  if (item.kind !== 'episode') return { ...item };
+  const isXtreamOwned = playlists.some(pl => pl.id === item.accountId && pl.source === 'xtream');
+  if (!isXtreamOwned && !isXtreamSeriesStreamUrl(item.url)) {
+    return { ...item };
+  }
+  return {
+    ...item,
+    ext: item.ext || extFromUrl(item.url) || 'mp4',
+    url: '',
+  };
+}
+
+function sanitizeResumeForStorage(
+  entry: ResumeEntry,
+  playlists: readonly PlaylistEntry[],
+): ResumeEntry {
+  if (!entry.episodeQueue || entry.episodeQueue.length === 0) return entry;
+  return {
+    ...entry,
+    episodeQueue: entry.episodeQueue.map(item => sanitizeEpisodeQueueItem(item, playlists)),
+  };
 }
 
 function record(key: string, value: unknown, extra: Partial<UserDataRecord> = {}): UserDataRecord {
@@ -1281,6 +1318,7 @@ export const StorageService = {
       entry = { ...entry, position: 0 };
     }
     const tooEarly = !opts.keepStart && entry.position < CONFIG.XTREAM.RESUME_MIN_SECS;
+    entry = sanitizeResumeForStorage(entry, get<PlaylistEntry[]>('playlists', []));
     // A duration within the pad of zero (a growing EVENT playlist) can't tell an end.
     if (finished && entry.duration > 2 * CONFIG.XTREAM.RESUME_FINISH_PAD) StorageService.setCatalogMark(entry.accountId, entry.kind, entry.itemId, { watched: true });
     if (userData) {

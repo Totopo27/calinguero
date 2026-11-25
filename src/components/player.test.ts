@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 
 const { healthMock, playlistMock } = vi.hoisted(() => ({
@@ -3142,6 +3143,127 @@ describe('Player VOD mode', () => {
     expect(player.isVod()).toBe(false);
     vi.advanceTimersByTime(10_000);
     expect(r.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('hydrates a stripped episodeQueue item from its Xtream account on auto-advance and skip', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+
+    const strippedNext = {
+      url: '', title: 'Series One — S1E2', poster: '', accountId: 'x',
+      itemId: 'e2', kind: 'episode' as const, ext: 'mkv', subtitles: [],
+      watchlistOwner: { kind: 'series' as const, itemId: 's1' },
+    };
+    player.playVod(req({
+      accountId: 'x',
+      itemId: 'e1',
+      kind: 'episode',
+      url: 'http://host/series/u1/p1/e1.mp4',
+      episodeQueue: [strippedNext],
+      watchlistOwner: { kind: 'series', itemId: 's1' },
+    }));
+
+    vi.mocked(probeMedia).mockClear();
+    video.dispatchEvent(new Event('ended'));
+    expect(StorageService.setResume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ itemId: 'e2', ext: 'mkv' }),
+      { keepStart: true },
+    );
+    vi.advanceTimersByTime(CONFIG.PLAYER.UP_NEXT_COUNTDOWN * 1000);
+    expect(probeMedia).toHaveBeenLastCalledWith(
+      'http://host/series/u1/p1/e2.mkv',
+      'x|media_probe|episode|e2',
+    );
+    expect((player as unknown as { vod: { url: string } | null }).vod?.url)
+      .toBe('http://host/series/u1/p1/e2.mkv');
+
+    const strippedThird = {
+      url: '', title: 'Series One — S1E3', poster: '', accountId: 'x',
+      itemId: 'e3', kind: 'episode' as const, ext: 'mp4', subtitles: [],
+      watchlistOwner: { kind: 'series' as const, itemId: 's1' },
+    };
+    player.playVod(req({
+      accountId: 'x',
+      itemId: 'e2',
+      kind: 'episode',
+      url: 'http://host/series/u1/p1/e2.mkv',
+      episodeQueue: [strippedThird],
+      watchlistOwner: { kind: 'series', itemId: 's1' },
+    }));
+    vi.mocked(probeMedia).mockClear();
+    player.skipEpisode(1);
+    vi.advanceTimersByTime(CONFIG.PLAYER.EPISODE_SKIP_SETTLE_MS);
+    expect(probeMedia).toHaveBeenLastCalledWith(
+      'http://host/series/u1/p1/e3.mp4',
+      'x|media_probe|episode|e3',
+    );
+    expect((player as unknown as { vod: { url: string } | null }).vod?.url)
+      .toBe('http://host/series/u1/p1/e3.mp4');
+  });
+
+  it('bails out via onBack when a stripped episodeQueue item cannot resolve its removed Xtream account', () => {
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    HTMLMediaElement.prototype.load = vi.fn();
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'duration', { value: 1800, configurable: true });
+    container.appendChild(video);
+    player.init(video);
+
+    const prevPlaylists = vi.mocked(StorageService.getPlaylists).getMockImplementation();
+    vi.mocked(StorageService.getPlaylists).mockReturnValue([]);
+    try {
+      const strippedNext = {
+        url: '', title: 'Series One — S1E2', poster: '', accountId: 'x',
+        itemId: 'e2', kind: 'episode' as const, ext: 'mkv', subtitles: [],
+        watchlistOwner: { kind: 'series' as const, itemId: 's1' },
+      };
+      const onBack = vi.fn();
+      player.playVod(req({
+        accountId: 'x',
+        itemId: 'e1',
+        kind: 'episode',
+        url: 'http://host/series/u1/p1/e1.mp4',
+        episodeQueue: [strippedNext],
+        watchlistOwner: { kind: 'series', itemId: 's1' },
+        onBack,
+      }));
+
+      vi.mocked(probeMedia).mockClear();
+      video.dispatchEvent(new Event('ended'));
+      expect(onBack).toHaveBeenCalledTimes(1);
+      expect((player as unknown as { upNextTimer: unknown }).upNextTimer).toBeNull();
+      vi.advanceTimersByTime(CONFIG.PLAYER.UP_NEXT_COUNTDOWN * 1000);
+      expect(probeMedia).not.toHaveBeenCalled();
+
+      const strippedThird = {
+        url: '', title: 'Series One — S1E3', poster: '', accountId: 'x',
+        itemId: 'e3', kind: 'episode' as const, ext: 'mp4', subtitles: [],
+        watchlistOwner: { kind: 'series' as const, itemId: 's1' },
+      };
+      const onBack2 = vi.fn();
+      player.playVod(req({
+        accountId: 'x',
+        itemId: 'e2',
+        kind: 'episode',
+        url: 'http://host/series/u1/p1/e2.mkv',
+        episodeQueue: [strippedThird],
+        watchlistOwner: { kind: 'series', itemId: 's1' },
+        onBack: onBack2,
+      }));
+      vi.mocked(probeMedia).mockClear();
+      player.skipEpisode(1);
+      vi.advanceTimersByTime(CONFIG.PLAYER.EPISODE_SKIP_SETTLE_MS);
+      expect(onBack2).toHaveBeenCalledTimes(1);
+      expect(probeMedia).not.toHaveBeenCalled();
+    } finally {
+      if (prevPlaylists) vi.mocked(StorageService.getPlaylists).mockImplementation(prevPlaylists);
+    }
   });
 
   it('ignores channel up/down in VOD mode', () => {

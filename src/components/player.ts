@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type {
   Action,
   AudioTrackOption,
@@ -15,6 +16,7 @@ import type {
 } from '../types';
 import {
   formatXtreamCatchupStart,
+  resolveVodQueueItemUrl,
   xtreamCatchupSources as buildXtreamCatchupSources,
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
@@ -1375,7 +1377,7 @@ export class Player {
     if (!next || next.watchlistOwner?.itemId !== owner.itemId) return;
     StorageService.setResume({
       accountId: next.accountId, kind: 'episode', itemId: next.itemId,
-      name: next.title, poster: next.poster, ext: extFromUrl(next.url),
+      name: next.title, poster: next.poster, ext: next.ext || extFromUrl(next.url),
       position: saved?.position ?? 0, duration: saved?.duration ?? 0, updatedAt: Date.now(),
       episodeQueue: finished.episodeQueue!.slice(1),
       watchlistOwner: next.watchlistOwner,
@@ -1385,6 +1387,12 @@ export class Player {
     }, { keepStart: true });
   }
 
+  private hydrateQueueItem<T extends VodQueueItem>(item: T): T {
+    if (item.url) return item;
+    const url = resolveVodQueueItemUrl(item, StorageService.getPlaylists());
+    return url ? { ...item, url } : item;
+  }
+
   private startNextItem(
     next: VodQueueItem,
     remaining: VodQueueItem[],
@@ -1392,16 +1400,21 @@ export class Player {
     onBack: () => void,
     finished: VodPlayback,
   ): void {
+    const hydrated = this.hydrateQueueItem(next);
+    if (!hydrated.url) {
+      onBack();
+      return;
+    }
     this.recreateVideoEl();
     // The PIN unlocked the whole series, so its next episode continues.
-    this.upNextAuthorized = isEpisodeQueue && sameParentalItem(finished, next);
+    this.upNextAuthorized = isEpisodeQueue && sameParentalItem(finished, hydrated);
     this.vod = {
-      ...next,
+      ...hydrated,
       resumeSecs: 0,
       episodeQueue: isEpisodeQueue ? remaining : undefined,
       previousEpisodes: isEpisodeQueue ? [...(finished.previousEpisodes ?? []), queueItem(finished)] : undefined,
       watchlistQueue: isEpisodeQueue ? undefined : remaining,
-      holdsSeriesPlace: isEpisodeQueue && !!next.watchlistOwner,
+      holdsSeriesPlace: isEpisodeQueue && !!hydrated.watchlistOwner,
       onBack,
     };
     this.upNextSeconds = CONFIG.PLAYER.UP_NEXT_COUNTDOWN;
@@ -1424,6 +1437,10 @@ export class Player {
   private playNextItem(): void {
     const next = this.vod;
     if (!next || !this.upNextTimer) return;
+    if (!next.url) {
+      this.cancelNextItem();
+      return;
+    }
     const authorized = this.upNextAuthorized;
     log.debug('Up next starting', 'event=parental.upnext', `kind=${next.kind}`,
       `sameItem=${String(authorized)}`);
@@ -1480,14 +1497,22 @@ export class Player {
     const origin = this.skipOrigin;
     this.clearSkipTimer();
     if (!next || !origin) return;
-    if (sameParentalItem(origin, next)) {
-      this.playVodResolved(next);
+    const hydrated = this.hydrateQueueItem(next);
+    if (!hydrated.url) {
+      this.vod = null;
+      this.stop();
+      next.onBack();
+      return;
+    }
+    this.vod = hydrated;
+    if (sameParentalItem(origin, hydrated)) {
+      this.playVodResolved(hydrated);
       return;
     }
     this.vod = null;
-    if (!this.authorizeVod(next, () => this.playVodResolved(next))) {
+    if (!this.authorizeVod(hydrated, () => this.playVodResolved(hydrated))) {
       this.stop();
-      next.onBack();
+      hydrated.onBack();
     }
   }
 
@@ -2668,7 +2693,8 @@ function sameParentalScope(a: Channel, b: Channel): boolean {
 function queueItem(v: VodPlayback): VodQueueItem {
   return {
     url: v.url, title: v.title, poster: v.poster, accountId: v.accountId, itemId: v.itemId,
-    kind: v.kind, categoryId: v.categoryId, parentalItemId: v.parentalItemId,
+    kind: v.kind, ext: v.ext || extFromUrl(v.url) || undefined,
+    categoryId: v.categoryId, parentalItemId: v.parentalItemId,
     subtitles: v.subtitles, searchMeta: v.searchMeta, episodeTitle: v.episodeTitle,
     watchlistOwner: v.watchlistOwner,
   };

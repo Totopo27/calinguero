@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   Channel,
@@ -154,6 +155,33 @@ describe('ParentalControlService', () => {
     expect(ParentalControlService.decision(request([
       { kind: 'live-group', playlistId: 'p1', groupKey: 'Kids' },
     ])).allowed).toBe(false);
+  });
+
+  it('revokes approval when catalogRevision changes on a managed source at the same URL', () => {
+    const managed = {
+      id: 'm1',
+      name: 'Central Live',
+      url: 'http://host/central.m3u',
+      source: 'url' as const,
+      managed: true,
+      catalogRevision: 'rev-1',
+    };
+    storage.playlists = [...sources, managed];
+    ParentalControlService.adoptSource('live', 'm1', []);
+    expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(true);
+
+    const unchanged = storage.playlists;
+    ParentalControlService.reviewChangedSources(unchanged, [
+      ...sources,
+      { ...managed, catalogRevision: 'rev-1' },
+    ]);
+    expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(true);
+
+    ParentalControlService.reviewChangedSources(unchanged, [
+      ...sources,
+      { ...managed, catalogRevision: 'rev-2' },
+    ]);
+    expect(ParentalControlService.sourceApproved('live', 'm1')).toBe(false);
   });
 
   it('approves the current sources for a config saved without the list', () => {

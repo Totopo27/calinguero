@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 import type { Channel, VodQueueItem } from '../types';
 import { DRM_OPTION_KEYS } from '../services/drm-option-keys';
 
@@ -64,6 +65,7 @@ export function channelIdentityUrl(ch: Channel): string {
 }
 
 interface KeyMemo {
+  canonicalId: string;
   identity: string;
   key?: string;
 }
@@ -73,10 +75,11 @@ interface KeyMemo {
 const keyMemos = new WeakMap<Channel, KeyMemo>();
 
 function keyMemo(ch: Channel): KeyMemo {
+  const canonicalId = ch.canonicalId || '';
   const identity = channelIdentityUrl(ch);
   let memo = keyMemos.get(ch);
-  if (!memo || memo.identity !== identity) {
-    memo = { identity };
+  if (!memo || memo.canonicalId !== canonicalId || memo.identity !== identity) {
+    memo = { canonicalId, identity };
     keyMemos.set(ch, memo);
   }
   return memo;
@@ -85,7 +88,11 @@ function keyMemo(ch: Channel): KeyMemo {
 /** Stable per-stream identity used by all channel-scoped data. */
 export function channelKey(ch: Channel): string {
   const memo = keyMemo(ch);
-  if (memo.key === undefined) memo.key = fnv1a(stableStreamUrl(memo.identity));
+  if (memo.key === undefined) {
+    memo.key = memo.canonicalId
+      ? `cid:${encodeURIComponent(memo.canonicalId)}`
+      : fnv1a(stableStreamUrl(memo.identity));
+  }
   return memo.key;
 }
 

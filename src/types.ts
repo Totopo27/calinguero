@@ -1,3 +1,4 @@
+// NOTICE: Modified for the Calinguero project in 2026.
 export type XtreamCatchupSourceKind =
   | 'path-ts'
   | 'path-bare'
@@ -13,6 +14,8 @@ export interface XtreamCatchupSource {
 
 export interface Channel {
   id: string;
+  /** Server-assigned stable Calinguero identifier decoupling persistence from stream URLs. */
+  canonicalId?: string;
   name: string;
   logo: string;
   group: string;
@@ -111,6 +114,8 @@ export interface ManualEpgSource {
   url: string;
   /** Empty means the source applies to every playlist. */
   playlistIds: string[];
+  /** Provisioned and reconciled by the central catalog bootstrap service. */
+  managed?: boolean;
 }
 
 export interface ParsedPlaylist {
@@ -214,6 +219,10 @@ export interface PlaylistEntry {
   /** False temporarily removes this source from every content surface without
    *  deleting its configuration or user data. Missing/true means enabled. */
   enabled?: boolean;
+  /** Provisioned and reconciled by the central catalog bootstrap service. */
+  managed?: boolean;
+  /** Central catalog revision string attached when provisioned by CatalogBootstrapService. */
+  catalogRevision?: string;
   /** Credentials and live output preference for an 'xtream' entry. */
   xtream?: {
     username: string;
@@ -703,6 +712,8 @@ export interface VodQueueItem {
   accountId: string;
   itemId: string;
   kind: ResumeKind;
+  /** Container extension preserved when persisted queue URLs are stripped. */
+  ext?: string;
   /** Category and owning catalog item used by parental-control rules. */
   categoryId?: string;
   parentalItemId?: string;

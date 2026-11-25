@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// NOTICE: Modified for the Calinguero project in 2026.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
@@ -1364,5 +1365,53 @@ describe('StorageService Live category snapshots without IndexedDB', () => {
     expect(StorageService.getLiveCategorySnapshot('x1')).toEqual(snap);
     expect(StorageService.getLiveCategorySnapshot('x2')).toBeNull();
     expect(StorageService.getLiveCategorySnapshot('x3')).toBeNull();
+  });
+});
+
+describe('StorageService resume episodeQueue credential hygiene', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    StorageService.setPlaylists([]);
+  });
+
+  it('strips Xtream URLs from persisted episodeQueue while preserving ext and caller object', () => {
+    const queued = {
+      url: 'http://host:8080/series/u1/p1/e2.mkv',
+      title: 'Series One — S1E2',
+      poster: '',
+      accountId: 'x1',
+      itemId: 'e2',
+      kind: 'episode' as const,
+      subtitles: [],
+    };
+    const keepOther = {
+      url: 'http://host/public/e3.mp4',
+      title: 'Series Two — S1E3',
+      poster: '',
+      accountId: 'm1',
+      itemId: 'e3',
+      kind: 'episode' as const,
+      subtitles: [],
+    };
+
+    StorageService.setResume({
+      accountId: 'x1',
+      kind: 'episode',
+      itemId: 'e1',
+      name: 'Series One — S1E1',
+      poster: '',
+      ext: 'mp4',
+      position: 120,
+      duration: 1800,
+      updatedAt: 1000,
+      episodeQueue: [queued, keepOther],
+    });
+
+    expect(queued.url).toBe('http://host:8080/series/u1/p1/e2.mkv');
+    const saved = StorageService.getResume('x1', 'episode', 'e1');
+    expect(saved?.episodeQueue).toEqual([
+      expect.objectContaining({ itemId: 'e2', url: '', ext: 'mkv' }),
+      expect.objectContaining({ itemId: 'e3', url: 'http://host/public/e3.mp4' }),
+    ]);
   });
 });
