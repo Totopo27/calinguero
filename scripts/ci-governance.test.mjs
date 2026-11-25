@@ -13,9 +13,10 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('CI and fork governance', () => {
-  it('removes automatic GitHub Pages publishing and upstream Homebrew repository catalog', () => {
+  it('removes automatic GitHub Pages publishing, unreferenced pages renderer, and upstream Homebrew repository catalog', () => {
     expect(existsSync(resolve(repoRoot, '.github/workflows/github-pages.yml'))).toBe(false);
     expect(existsSync(resolve(repoRoot, 'homebrew-repository.json'))).toBe(false);
+    expect(existsSync(resolve(repoRoot, 'scripts/render-github-pages.mjs'))).toBe(false);
   });
 
   it('hardens build.yml permissions, triggers, actions, and release steps', () => {
